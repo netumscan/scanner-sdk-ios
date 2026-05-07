@@ -16,6 +16,13 @@ Package binary URL for this version:
 
 - https://sdk.netum.info/ios/scannersdk/0.1.1/ScannerSDK.xcframework.zip
 
+License:
+
+- Free for commercial application integration and redistribution as part of
+  your applications.
+- Closed-source. Source files visible in this repository are provided only for
+  SwiftPM package integration and public API use.
+
 This repository contains the SwiftPM package surface and references the
 versioned binary XCFramework. The private development repository is not
 required for customer integration.
