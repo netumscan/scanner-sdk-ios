@@ -1,0 +1,4 @@
+module CNSDK [system] {
+    header "CNSDK.h"
+    export *
+}
