@@ -8,6 +8,10 @@ SwiftPM repository:
 
 - https://github.com/netumscan/scanner-sdk-ios
 
+Samples:
+
+- https://github.com/netumscan/scanner-sdk-samples
+
 Binary CDN base:
 
 - https://sdk.netum.info/ios/scannersdk
