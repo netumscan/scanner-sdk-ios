@@ -18,7 +18,7 @@ let package = Package(
         .binaryTarget(
             name: "ScannerSDKBinary",
             url: "https://github.com/netumscan/scanner-sdk-ios/releases/download/v0.1.1/ScannerSDK.xcframework.zip",
-            checksum: "357a8e3f759a09027fca2ade1fad80be8927c123130e10f41514dc1b7b9683fa"
+            checksum: "a2d34ce4e8230677cbb91b7f3dd13302b5599c990050f0771494372807539cdd"
         ),
         .target(
             name: "CNSDK",
