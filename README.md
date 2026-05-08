@@ -14,11 +14,11 @@ Samples:
 
 Binary CDN base:
 
-- https://sdk.netum.info/ios/scannersdk
+- https://github.com/netumscan/scanner-sdk-ios/releases/download
 
 Package binary URL for this version:
 
-- https://sdk.netum.info/ios/scannersdk/0.1.1/ScannerSDK.xcframework.zip
+- https://github.com/netumscan/scanner-sdk-ios/releases/download/v0.1.1/ScannerSDK.xcframework.zip
 
 License:
 
