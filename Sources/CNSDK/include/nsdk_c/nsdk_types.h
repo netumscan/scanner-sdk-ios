@@ -407,7 +407,6 @@ typedef struct nsdk_device_model_profile_t {
     uint16_t usb_product_ids[8];
     int32_t usb_interface_number;
     int32_t usb_hid_report_id;
-    int32_t usb_hid_framing_mode;
 } nsdk_device_model_profile_t;
 
 typedef struct nsdk_discovery_request_t {

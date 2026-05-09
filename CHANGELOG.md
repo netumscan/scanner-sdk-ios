@@ -1,62 +1,59 @@
-# Release 0.1.1
+# Release 0.1.2
 
-This release closes the first public mobile SDK packaging pass. It focuses on
-query API cleanup, bilingual sample-app polish, Android compatibility warning
-cleanup, and release documentation.
+This release is prepared for online test distribution. It focuses on the
+Android Maven, Apple SwiftPM, public distribution repository, and release
+version-consistency workflows.
 
 ## Added
 
-- Added missing Bluetooth SSI master-command documentation.
-- Added Bluetooth query controls, decoder module switching, immediate scan,
-  `%KB#SP0`, and the `$BUZZ#B0` through `$BUZZ#BJ` buzzer command set across
-  `core`, `api-c`, Android, and Swift.
-- Added Bluetooth firmware version, Bluetooth name, Bluetooth address, and
-  decoder module fields to `ScannerInfo`.
-- Added active read APIs:
-  - C API: `nsdk_refresh_info` / `nsdk_get_battery_info`
-  - Kotlin: `refreshInfo()` / `getBatteryInfo()`
-  - Swift: `refreshInfo()` / `getBatteryInfo()`
-- Added cached info APIs:
-  - C API: `nsdk_get_cached_info`
-  - Kotlin: `getCachedInfo()`
-  - Swift: `getCachedInfo()`
+- Added Android Maven Central publishing scaffolding:
+  - `maven-publish`
+  - signing
+  - POM metadata injection
+  - GitHub Actions workflow
+- Added Apple `SPM + XCFramework` release scaffolding:
+  - single `ScannerSDK.xcframework.zip`
+  - checksum generation
+  - release-mode `Package.swift`
+  - GitHub Actions workflow
+- Added a unified release-version check script:
+  - `tools/release/verify-release-version.sh`
+- Added release documentation for Android Maven Central, Apple SwiftPM,
+  cross-platform distribution, and the release checklist.
 
 ## Changed
 
-- Changed the release license to `Netum Scanner SDK License`: the SDK is free
+- Changed the project license to `Netum Scanner SDK License`: the SDK is free
   for commercial application integration, closed-source, and must not be
   redistributed as a standalone SDK, component library, or source package.
-- Reduced initialization queries to the minimum required path and removed the
-  full public configuration-query API.
-- Updated sample-app state displays to prefer typed models and session cache.
-- Updated the C API smoke sample to demonstrate `refresh + cached`.
-- Removed legacy `getInfo/getConfig` APIs.
-- Updated Android and iPhone sample documentation for two-page layout, bilingual
-  switching, and log export behavior.
-
-## Fixed
-
-- Fixed reversed parsing and switch semantics for `$MOTO#0 / $MOTO#1`.
-- Fixed timeout handling while waiting for the first record in ACK-only streaming
-  responses.
-- Fixed ACK-only master commands not updating the session configuration cache.
-- Fixed inconsistent cache updates between text-command and enum-command entry
-  points.
-- Fixed the Android sample `ScannerInfo` JNI constructor signature mismatch.
-- Fixed frozen quick-action and command-group text after Android / iOS sample
-  language switching.
-- Fixed Android sample layout not avoiding system status and navigation bars.
-- Suppressed Android `compileSdk 35` guidance noise and old BLE API warnings.
+- Updated Swift `CNSDK.h` to use stable package-local header references.
+- Added explicit `.NET` package version metadata and release-version checking.
+- Updated the Android demo version to `0.1.2` and `versionCode` to `2` for
+  online test upload.
 
 ## Documentation
 
-- Updated `README.md`.
-- Updated Android sample documentation.
-- Updated iOS platform documentation.
-- Updated device regression checklist documentation.
+- Added SDK capability matrix, quickstart, platform permissions,
+  troubleshooting, security and privacy, versioning and ABI, and documentation
+  governance guides.
+- Added Markdown documentation checks and Docs CI.
+- Updated Android and Apple wrapper README files for public distribution.
+
+## Release Status
+
+- Android Maven Central: publishing scaffolding and dry-run validation path are
+  ready. Central Portal, signing, and distribution-repository credentials must
+  be injected before upload.
+- Apple SwiftPM: XCFramework packaging, checksum generation, release-mode
+  `Package.swift`, and distribution-repository export are ready.
+- Consumer validation: after publication, validate the release from a clean
+  Android app and a clean SwiftPM project.
 
 ## Validation
 
-- `ctest` passed.
-- `./gradlew test` passed.
-- `swift test` passed.
+- Release executor must record the actual result for:
+  - `./tools/release/verify-release-version.sh 0.1.2`
+  - `python3 tools/dev/check_mobile_public_api_baseline.py`
+  - Android release dry run
+  - Apple release dry run
+  - external consumer validation

@@ -256,12 +256,6 @@ public struct DeviceModelProfile: Sendable {
     public let usbProductIds: [Int]
     public let usbInterfaceNumber: Int?
     public let usbHidReportId: Int?
-    public let usbHidFramingMode: UsbHidFramingMode
-}
-
-public enum UsbHidFramingMode: Int, CaseIterable, Sendable {
-    case none = 0
-    case lengthPrefixed = 1
 }
 
 public struct BatteryInfo: Sendable {

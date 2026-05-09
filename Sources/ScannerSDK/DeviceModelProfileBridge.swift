@@ -31,8 +31,7 @@ internal enum DeviceModelProfileBridge {
                 count: profile.usb_product_id_count
             ),
             usbInterfaceNumber: profile.usb_interface_number < 0 ? nil : Int(profile.usb_interface_number),
-            usbHidReportId: profile.usb_hid_report_id < 0 ? nil : Int(profile.usb_hid_report_id),
-            usbHidFramingMode: UsbHidFramingMode(rawValue: Int(profile.usb_hid_framing_mode)) ?? .none
+            usbHidReportId: profile.usb_hid_report_id < 0 ? nil : Int(profile.usb_hid_report_id)
         )
     }
 
