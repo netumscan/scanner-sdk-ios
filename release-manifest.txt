@@ -1,4 +1,4 @@
 name=ScannerSDK
-version=0.1.2
+version=0.1.3
 zip_file=ScannerSDK.xcframework.zip
-checksum=5d48604b2fae49955309c2e1af6363a9f96b0400b5413d92e83628ca3c55fdaf
+checksum=7aa53e47108ee89cfe61a12921c6659950755b0690e9288d3ffcbfba67a0dd4e

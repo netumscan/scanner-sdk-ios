@@ -1,59 +1,35 @@
-# Release 0.1.2
+# Release 0.1.3
 
-This release is prepared for online test distribution. It focuses on the
-Android Maven, Apple SwiftPM, public distribution repository, and release
-version-consistency workflows.
-
-## Added
-
-- Added Android Maven Central publishing scaffolding:
-  - `maven-publish`
-  - signing
-  - POM metadata injection
-  - GitHub Actions workflow
-- Added Apple `SPM + XCFramework` release scaffolding:
-  - single `ScannerSDK.xcframework.zip`
-  - checksum generation
-  - release-mode `Package.swift`
-  - GitHub Actions workflow
-- Added a unified release-version check script:
-  - `tools/release/verify-release-version.sh`
-- Added release documentation for Android Maven Central, Apple SwiftPM,
-  cross-platform distribution, and the release checklist.
+This release prepares Scanner SDK `0.1.3` for publication. It focuses on
+version alignment, public integration documentation, and release notes.
 
 ## Changed
 
-- Changed the project license to `Netum Scanner SDK License`: the SDK is free
-  for commercial application integration, closed-source, and must not be
-  redistributed as a standalone SDK, component library, or source package.
-- Updated Swift `CNSDK.h` to use stable package-local header references.
-- Added explicit `.NET` package version metadata and release-version checking.
-- Updated the Android demo version to `0.1.2` and `versionCode` to `2` for
-  online test upload.
+- Updated the project version to `0.1.3`.
+- Updated the Android demo version to `0.1.3` and `versionCode` to `3`.
+- Updated the `.NET` wrapper package `Version` to `0.1.3`.
 
 ## Documentation
 
-- Added SDK capability matrix, quickstart, platform permissions,
-  troubleshooting, security and privacy, versioning and ABI, and documentation
-  governance guides.
-- Added Markdown documentation checks and Docs CI.
-- Updated Android and Apple wrapper README files for public distribution.
+- Updated the README current release version.
+- Updated Android Maven and Apple SwiftPM public integration examples.
+- Added the `0.1.3` release note.
 
 ## Release Status
 
-- Android Maven Central: publishing scaffolding and dry-run validation path are
-  ready. Central Portal, signing, and distribution-repository credentials must
-  be injected before upload.
-- Apple SwiftPM: XCFramework packaging, checksum generation, release-mode
-  `Package.swift`, and distribution-repository export are ready.
+- Android Maven Central: pending GitHub Actions dry run, public distribution
+  repository sync, Central Portal upload, and manual `Publish`.
+- Apple SwiftPM: pending GitHub Actions dry run, public distribution repository
+  sync, and private development repository `v0.1.3` GitHub Release.
 - Consumer validation: after publication, validate the release from a clean
   Android app and a clean SwiftPM project.
 
 ## Validation
 
 - Release executor must record the actual result for:
-  - `./tools/release/verify-release-version.sh 0.1.2`
+  - `./tools/release/verify-release-version.sh 0.1.3`
   - `python3 tools/dev/check_mobile_public_api_baseline.py`
+  - `./tools/release/build-android-local.sh`
   - Android release dry run
   - Apple release dry run
   - external consumer validation

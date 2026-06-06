@@ -50,11 +50,11 @@ public extension BasicDeviceCommand {
     var localizedRiskLabel: BasicDeviceCommandRiskLabel {
         switch self {
         case .factoryReset:
-            return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_restores_factory_defaults_and_may_erase_the_current_configuration", fallbackDisplayName: "This restores factory defaults and may erase the current configuration.")
+            return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_restores_factory_defaults_and_may_erase_the_current_configuration", fallbackDisplayName: "This restores defaults. If custom defaults exist, those values are restored; otherwise factory defaults are restored.")
         case .writeCustomDefaults:
             return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_writes_the_current_configuration_as_the_new_custom_defaults", fallbackDisplayName: "This writes the current configuration as the new custom defaults.")
         case .restoreCustomDefaults:
-            return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_restores_the_previously_saved_custom_defaults", fallbackDisplayName: "This restores the previously saved custom defaults.")
+            return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_restores_the_previously_saved_custom_defaults", fallbackDisplayName: "This clears custom defaults and restores factory defaults.")
         case .storeMode, .normalMode:
             return BasicDeviceCommandRiskLabel(localizationKey: "nsdk.basic_device_command_risk.this_changes_the_device_operating_mode_and_may_immediately_alter_current_behavior", fallbackDisplayName: "This changes the device operating mode and may immediately alter current behavior.")
         case .uploadMemoryDataAndClear, .clearMemory:

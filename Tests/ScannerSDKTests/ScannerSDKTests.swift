@@ -669,10 +669,10 @@ final class ScannerSDKTests: XCTestCase {
 
         let basicRisk = BasicDeviceCommandRiskLabel(
             localizationKey: "nsdk.basic_device_command_risk.this_restores_factory_defaults_and_may_erase_the_current_configuration",
-            fallbackDisplayName: "This restores factory defaults and may erase the current configuration."
+            fallbackDisplayName: "This restores defaults. If custom defaults exist, those values are restored; otherwise factory defaults are restored."
         )
         XCTAssertEqual(basicRisk.localizationKey, "nsdk.basic_device_command_risk.this_restores_factory_defaults_and_may_erase_the_current_configuration")
-        XCTAssertEqual(basicRisk.fallbackDisplayName, "This restores factory defaults and may erase the current configuration.")
+        XCTAssertEqual(basicRisk.fallbackDisplayName, "This restores defaults. If custom defaults exist, those values are restored; otherwise factory defaults are restored.")
 
         let runtimeBasicRisk = BasicDeviceCommand.clearMemory.localizedRiskLabel
         XCTAssertEqual(runtimeBasicRisk.localizationKey, "nsdk.basic_device_command_risk.this_affects_stored_barcode_data_on_the_device_and_may_be_irreversible")

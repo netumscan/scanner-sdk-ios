@@ -2,7 +2,7 @@
 
 Public iOS SwiftPM distribution repository for Netum Scanner SDK.
 
-Current version: 0.1.2
+Current version: 0.1.3
 
 SwiftPM repository:
 
@@ -18,7 +18,7 @@ Binary CDN base:
 
 Package binary URL for this version:
 
-- https://github.com/netumscan/scanner-sdk-ios/releases/download/v0.1.2/ScannerSDK.xcframework.zip
+- https://github.com/netumscan/scanner-sdk-ios/releases/download/v0.1.3/ScannerSDK.xcframework.zip
 
 License:
 

@@ -210,6 +210,20 @@ public enum MasterCommand: Int32, CaseIterable, Sendable {
     case sdkBeepBH = 0x30CE
     case sdkBeepBI = 0x30CF
     case sdkBeepBJ = 0x30D0
+    case setBtName = 0x30D1
+    case enableTimeStampPrefix = 0x30D2
+    case timeStampSeparatorTab = 0x30D3
+    case timeStampSeparatorRs = 0x30D4
+    case timeStampSeparatorSemicolon = 0x30D5
+    case batchScanMode = 0x30D6
+    case offlineCacheToggle = 0x30D7
+    case iosPopupKeyboardAfterSend = 0x30D8
+    case ctrlKeyConfig4 = 0x30D9
+    case altKeyConfig5 = 0x30DA
+    case gs1AiRaw = 0x30DB
+    case gs1AiBrackets = 0x30DC
+    case gs1AiBracketsCr = 0x30DD
+    case gs1AiBracketsTab = 0x30DE
 
     internal var cValue: nsdk_master_command_id_t {
         nsdk_master_command_id_t(rawValue)
