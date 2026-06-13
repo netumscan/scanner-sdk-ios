@@ -79,6 +79,7 @@ public final class ScannerSDK: @unchecked Sendable {
         _ = nsdk_set_session_state_callback(nil, nil)
         _ = nsdk_set_scan_data_callback(nil, nil)
         _ = nsdk_set_session_failure_callback(nil, nil)
+        _ = nsdk_set_session_init_stage_callback(nil, nil)
         _ = nsdk_set_log_callback(nil, nil)
 
         let shutdownCode = nsdk_shutdown()
@@ -690,6 +691,7 @@ public final class ScannerSDK: @unchecked Sendable {
         _ = nsdk_set_session_state_callback(nsdk_swift_state_callback, userData)
         _ = nsdk_set_scan_data_callback(nsdk_swift_scan_callback, userData)
         _ = nsdk_set_session_failure_callback(nsdk_swift_session_failure_callback, userData)
+        _ = nsdk_set_session_init_stage_callback(nsdk_swift_session_initialization_stage_callback, userData)
         _ = nsdk_set_log_callback(nsdk_swift_log_callback, userData)
         callbacksInstalled = true
     }
@@ -904,6 +906,49 @@ extension ScannerSDK {
         lock.unlock()
     }
 
+    internal func simulatePendingInitializationStage(
+        handle: UInt64,
+        selectedModelId: DeviceModelId,
+        stage: SessionInitializationStage,
+        timestampMs: UInt64,
+        traceId: UInt64,
+        success: Bool,
+        errorCode: Int32,
+        message: String?
+    ) {
+        if let session = findSession(handle: handle) {
+            session.onInitializationStage(
+                SessionInitializationStageEvent(
+                    sessionHandle: handle,
+                    deviceId: session.deviceId,
+                    selectedModelId: selectedModelId,
+                    stage: stage,
+                    timestampMs: timestampMs,
+                    traceId: traceId,
+                    success: success,
+                    errorCode: errorCode,
+                    message: message
+                )
+            )
+            return
+        }
+        lock.lock()
+        pendingSessionEvents[handle, default: PendingSessionEvents()].events.append(
+            .initializationStage(
+                PendingSessionInitializationStage(
+                    selectedModelId: selectedModelId,
+                    stage: stage,
+                    timestampMs: timestampMs,
+                    traceId: traceId,
+                    success: success,
+                    errorCode: errorCode,
+                    message: message
+                )
+            )
+        )
+        lock.unlock()
+    }
+
     fileprivate func handleSessionFailure(handle: UInt64, failure: nsdk_session_failure_t) {
         let transport = TransportType(rawValue: failure.transport.rawValue) ?? .bleGatt
         let code = TransportFailureCode(rawValue: failure.code.rawValue) ?? .unknown
@@ -939,6 +984,39 @@ extension ScannerSDK {
         lock.unlock()
     }
 
+    fileprivate func handleSessionInitializationStage(handle: UInt64, event: nsdk_session_init_stage_event_t) {
+        let stageEvent = SessionInitializationStageEvent(
+            sessionHandle: handle,
+            deviceId: findSession(handle: handle)?.deviceId ?? "",
+            selectedModelId: DeviceModelId(rawValue: event.selected_model_id.rawValue) ?? .unknown,
+            stage: SessionInitializationStage(cValue: event.stage),
+            timestampMs: event.timestamp_ms,
+            traceId: event.trace_id,
+            success: event.success != 0,
+            errorCode: event.error_code,
+            message: stringFromCStringBuffer(event.message).isEmpty ? nil : stringFromCStringBuffer(event.message)
+        )
+        if let session = findSession(handle: handle) {
+            session.onInitializationStage(stageEvent)
+            return
+        }
+        lock.lock()
+        pendingSessionEvents[handle, default: PendingSessionEvents()].events.append(
+            .initializationStage(
+                PendingSessionInitializationStage(
+                    selectedModelId: stageEvent.selectedModelId,
+                    stage: stageEvent.stage,
+                    timestampMs: stageEvent.timestampMs,
+                    traceId: stageEvent.traceId,
+                    success: stageEvent.success,
+                    errorCode: stageEvent.errorCode,
+                    message: stageEvent.message
+                )
+            )
+        )
+        lock.unlock()
+    }
+
     fileprivate func handleNativeLog(level: Int32, message: String) {
         let prefix = level >= 3 ? "core-error:" : "core:"
         emitDebug("\(prefix) \(message)")
@@ -959,10 +1037,21 @@ private struct PendingSessionFailure {
     let platformErrorCode: Int32
 }
 
+private struct PendingSessionInitializationStage {
+    let selectedModelId: DeviceModelId
+    let stage: SessionInitializationStage
+    let timestampMs: UInt64
+    let traceId: UInt64
+    let success: Bool
+    let errorCode: Int32
+    let message: String?
+}
+
 private enum PendingSessionEvent {
     case state(SessionState)
     case scan(PendingScanEvent)
     case failure(PendingSessionFailure)
+    case initializationStage(PendingSessionInitializationStage)
 }
 
 private struct PendingSessionEvents {
@@ -990,6 +1079,20 @@ private struct PendingSessionEvents {
                         message: ScannerSDK.describeTransportFailure(transport: failure.transport, code: failure.code),
                         bleTransportIssue: failure.bleTransportIssue,
                         platformErrorCode: failure.platformErrorCode
+                    )
+                )
+            case .initializationStage(let stage):
+                session.onInitializationStage(
+                    SessionInitializationStageEvent(
+                        sessionHandle: session.handle,
+                        deviceId: session.deviceId,
+                        selectedModelId: stage.selectedModelId,
+                        stage: stage.stage,
+                        timestampMs: stage.timestampMs,
+                        traceId: stage.traceId,
+                        success: stage.success,
+                        errorCode: stage.errorCode,
+                        message: stage.message
                     )
                 )
             }
@@ -1067,6 +1170,16 @@ private func nsdk_swift_session_failure_callback(
     guard let userData, let failure else { return }
     let sdk = Unmanaged<ScannerSDK>.fromOpaque(userData).takeUnretainedValue()
     sdk.handleSessionFailure(handle: session, failure: failure.pointee)
+}
+
+private func nsdk_swift_session_initialization_stage_callback(
+    session: nsdk_session_handle_t,
+    event: UnsafePointer<nsdk_session_init_stage_event_t>?,
+    userData: UnsafeMutableRawPointer?
+) {
+    guard let userData, let event else { return }
+    let sdk = Unmanaged<ScannerSDK>.fromOpaque(userData).takeUnretainedValue()
+    sdk.handleSessionInitializationStage(handle: session, event: event.pointee)
 }
 
 private func nsdk_swift_log_callback(

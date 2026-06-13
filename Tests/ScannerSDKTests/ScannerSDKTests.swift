@@ -147,6 +147,12 @@ final class ScannerSDKTests: XCTestCase {
                 payload: Data([0x01])
             )
         }
+        let setBluetoothName: (ScannerSession) throws -> CommandResponse = {
+            try $0.setBluetoothName("CS7501-A01")
+        }
+        let setTimestamp: (ScannerSession) throws -> CommandResponse = {
+            try $0.setTimestamp(Date(timeIntervalSince1970: 1_718_179_200))
+        }
         let moduleRawFrame: (ScannerSession) throws -> CommandResponse = {
             try $0.executeModuleRawFrame(family: .nt212x, frame: Data([0x04, 0xE4, 0x04, 0x00, 0xFF]))
         }
@@ -187,6 +193,8 @@ final class ScannerSDKTests: XCTestCase {
         XCTAssertNotNil(taxonomyGroupKeys)
         XCTAssertNotNil(taxonomyDomainGroups)
         XCTAssertNotNil(moduleCommand)
+        XCTAssertNotNil(setBluetoothName)
+        XCTAssertNotNil(setTimestamp)
         XCTAssertNotNil(moduleRawFrame)
         XCTAssertEqual(ProtocolChannelKind.scannerMaster.rawValue, 0)
         XCTAssertEqual(ModuleFamily.unknown.rawValue, 0)
@@ -1071,6 +1079,43 @@ final class ScannerSDKTests: XCTestCase {
         XCTAssertEqual(failure?.code, .connectionTimeout)
         XCTAssertEqual(failure?.deviceId, "AA:BB")
         XCTAssertEqual(failure?.platformErrorCode, 8)
+    }
+
+    func testPendingInitializationStageIsDeliveredAfterSessionRegistration() async {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 202, deviceId: "AA:BB", transportType: .bleGatt)
+        let stream = session.initializationStages
+        let received = expectation(description: "pending initialization stage delivered")
+        var stageEvent: SessionInitializationStageEvent?
+
+        sdk.simulatePendingInitializationStage(
+            handle: 202,
+            selectedModelId: .cs7501,
+            stage: .readingBattery,
+            timestampMs: 456,
+            traceId: 789,
+            success: true,
+            errorCode: 0,
+            message: "battery stage"
+        )
+
+        Task {
+            var iterator = stream.makeAsyncIterator()
+            stageEvent = await iterator.next()
+            received.fulfill()
+        }
+        await Task.yield()
+
+        _ = sdk.registerSessionForTesting(session)
+
+        await fulfillment(of: [received], timeout: 1.0)
+        XCTAssertEqual(stageEvent?.selectedModelId, .cs7501)
+        XCTAssertEqual(stageEvent?.stage, .readingBattery)
+        XCTAssertEqual(stageEvent?.timestampMs, 456)
+        XCTAssertEqual(stageEvent?.traceId, 789)
+        XCTAssertEqual(stageEvent?.deviceId, "AA:BB")
+        XCTAssertEqual(stageEvent?.message, "battery stage")
+        XCTAssertEqual(stageEvent?.success, true)
     }
 
     func testTransportFailureLabelsExposeRuntimeMetadata() {

@@ -2,6 +2,7 @@ import Foundation
 import CNSDK
 
 public final class ScannerSession: @unchecked Sendable {
+    private static let maxBluetoothNameLength = 244
     public let handle: UInt64
     public let deviceId: String
     public let transportType: TransportType
@@ -10,6 +11,7 @@ public final class ScannerSession: @unchecked Sendable {
     private let stateHub = StreamHub<SessionState>()
     private let scanHub = StreamHub<ScanEvent>()
     private let failureHub = StreamHub<SessionFailure>()
+    private let initializationStageHub = StreamHub<SessionInitializationStageEvent>()
     private let lock = NSLock()
     private var currentState: SessionState = .idle
     private var scanTextCharset: ScanTextCharset = .utf8
@@ -32,6 +34,10 @@ public final class ScannerSession: @unchecked Sendable {
 
     public var failureEvents: AsyncStream<SessionFailure> {
         failureHub.makeStream()
+    }
+
+    public var initializationStages: AsyncStream<SessionInitializationStageEvent> {
+        initializationStageHub.makeStream()
     }
 
     public var latestState: SessionState {
@@ -281,6 +287,21 @@ public final class ScannerSession: @unchecked Sendable {
         return try makeCommandResponse(response)
     }
 
+    public func setBluetoothName(_ name: String) throws -> CommandResponse {
+        precondition(!name.isEmpty, "name must not be empty")
+        precondition(name.utf8.count <= Self.maxBluetoothNameLength, "name must not exceed \(Self.maxBluetoothNameLength) bytes")
+        precondition(name.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value <= 0x7E }, "name must contain only printable ASCII characters")
+        return try executeTextCommand("AT+NAME=\(name)")
+    }
+
+    public func setTimestamp(_ date: Date = Date(), timeZone: TimeZone = .current) throws -> CommandResponse {
+        let adjusted = date.addingTimeInterval(1)
+        let offsetSeconds = Int64(timeZone.secondsFromGMT(for: adjusted))
+        let protocolTimestamp = Int64(adjusted.timeIntervalSince1970.rounded()) + offsetSeconds
+        precondition(protocolTimestamp > 0, "date must resolve to a positive RTCSTAMP value")
+        return try executeTextCommand("%RTCSTAMP#\(protocolTimestamp)")
+    }
+
     public func executeDataRuleCommand(
         kind: DataRuleKind,
         primary: Data,
@@ -479,6 +500,13 @@ public final class ScannerSession: @unchecked Sendable {
             "failure transport=\(failure.transportType) code=\(failure.code) issue=\(String(describing: failure.bleTransportIssue)) platformError=\(String(describing: failure.platformErrorCode))"
         )
         failureHub.yield(failure)
+    }
+
+    internal func onInitializationStage(_ event: SessionInitializationStageEvent) {
+        emitDebug(
+            "initializeSession stage=\(event.stage) trace=\(event.traceId) success=\(event.success) error=\(event.errorCode) message=\(event.message ?? "")"
+        )
+        initializationStageHub.yield(event)
     }
 
     private func ensureReady(_ operation: String) throws {

@@ -483,6 +483,18 @@ public struct SessionFailure: Sendable {
     public let platformErrorCode: Int32?
 }
 
+public struct SessionInitializationStageEvent: Sendable {
+    public let sessionHandle: UInt64
+    public let deviceId: String
+    public let selectedModelId: DeviceModelId
+    public let stage: SessionInitializationStage
+    public let timestampMs: UInt64
+    public let traceId: UInt64
+    public let success: Bool
+    public let errorCode: Int32
+    public let message: String?
+}
+
 public struct DiscoveryFailure: Sendable {
     public let transportType: TransportType
     public let code: DiscoveryFailureCode

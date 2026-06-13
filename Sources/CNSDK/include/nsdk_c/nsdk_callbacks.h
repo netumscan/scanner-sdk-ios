@@ -41,6 +41,12 @@ typedef void (*nsdk_session_failure_callback_t)(
     void* user_data
 );
 
+typedef void (*nsdk_session_init_stage_callback_t)(
+    nsdk_session_handle_t session,
+    const nsdk_session_init_stage_event_t* event,
+    void* user_data
+);
+
 typedef void (*nsdk_log_callback_t)(
     int32_t level,
     const char* message,

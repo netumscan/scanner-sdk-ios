@@ -235,6 +235,16 @@ typedef enum nsdk_session_state_t {
     NSDK_SESSION_ERROR = 8
 } nsdk_session_state_t;
 
+typedef enum nsdk_session_init_stage_t {
+    NSDK_SESSION_INIT_STARTED = 0,
+    NSDK_SESSION_INIT_READING_DEVICE_INFO = 1,
+    NSDK_SESSION_INIT_READING_BATTERY = 2,
+    NSDK_SESSION_INIT_READING_CAPABILITY_SUMMARY = 3,
+    NSDK_SESSION_INIT_READING_OPERATION_SUPPORT = 4,
+    NSDK_SESSION_INIT_COMPLETED = 5,
+    NSDK_SESSION_INIT_FAILED = 6
+} nsdk_session_init_stage_t;
+
 typedef enum nsdk_discovery_failure_code_t {
     NSDK_DISCOVERY_FAILURE_BLE_ADAPTER_DISABLED = 0,
     NSDK_DISCOVERY_FAILURE_BLE_SCANNER_UNAVAILABLE = 1,
@@ -489,6 +499,16 @@ typedef struct nsdk_session_failure_t {
     nsdk_ble_transport_issue_t ble_issue;
     int32_t platform_error;
 } nsdk_session_failure_t;
+
+typedef struct nsdk_session_init_stage_event_t {
+    nsdk_device_model_id_t selected_model_id;
+    nsdk_session_init_stage_t stage;
+    uint64_t timestamp_ms;
+    uint64_t trace_id;
+    int32_t success;
+    nsdk_error_t error_code;
+    char message[128];
+} nsdk_session_init_stage_event_t;
 
 typedef struct nsdk_discovery_failure_t {
     nsdk_transport_type_t transport;

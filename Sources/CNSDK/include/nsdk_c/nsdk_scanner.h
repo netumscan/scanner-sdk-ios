@@ -412,6 +412,11 @@ nsdk_error_t nsdk_set_session_failure_callback(
     void* user_data
 );
 
+nsdk_error_t nsdk_set_session_init_stage_callback(
+    nsdk_session_init_stage_callback_t callback,
+    void* user_data
+);
+
 nsdk_error_t nsdk_set_log_callback(
     nsdk_log_callback_t callback,
     void* user_data
