@@ -17,8 +17,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "ScannerSDKBinary",
-            url: "https://github.com/netumscan/scanner-sdk-ios/releases/download/v0.1.4/ScannerSDK.xcframework.zip",
-            checksum: "58e4e9d90a58a4079358a50d864d318c1747c7c7c21e4ff0f614805b839fa3e1"
+            url: "https://github.com/netumscan/scanner-sdk-ios/releases/download/v1.0.0/ScannerSDK.xcframework.zip",
+            checksum: "7a218086671b12531d1e32978717691adf6485d3e7e3ea0a5c7572189a0ffb2d"
         ),
         .target(
             name: "CNSDK",
@@ -33,6 +33,9 @@ let package = Package(
                 "ScannerSDKBinary",
             ],
             path: "Sources/ScannerSDK",
+            resources: [
+                .process("Resources"),
+            ],
             linkerSettings: [
                 .linkedFramework("CoreBluetooth"),
                 .linkedFramework("Foundation"),

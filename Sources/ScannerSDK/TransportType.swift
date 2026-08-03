@@ -1,7 +1,7 @@
 import Foundation
 import CNSDK
 
-public enum TransportType: UInt32, CaseIterable, Sendable {
+public enum TransportType: Int32, CaseIterable, Sendable {
     case bleGatt = 0
     case usbHid = 1
     case usbSerial = 2
@@ -21,7 +21,7 @@ public enum TransportType: UInt32, CaseIterable, Sendable {
     }
 
     internal var cValue: nsdk_transport_type_t {
-        nsdk_transport_type_t(rawValue: rawValue)
+        nsdk_transport_type_t(rawValue)
     }
 }
 

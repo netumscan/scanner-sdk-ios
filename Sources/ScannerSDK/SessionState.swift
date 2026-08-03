@@ -1,7 +1,7 @@
 import Foundation
 import CNSDK
 
-public enum SessionState: UInt32, Sendable {
+public enum SessionState: Int32, Sendable {
     case idle = 0
     case discovering = 1
     case connecting = 2
@@ -13,7 +13,7 @@ public enum SessionState: UInt32, Sendable {
     case error = 8
 
     internal init(cValue: nsdk_session_state_t) {
-        self = SessionState(rawValue: cValue.rawValue) ?? .error
+        self = SessionState(rawValue: cValue) ?? .error
     }
 
     public var localizedLabel: SessionStateLabel {

@@ -1,7 +1,7 @@
 import Foundation
 import CNSDK
 
-public enum DataRuleKind: UInt32, Sendable {
+public enum DataRuleKind: Int32, Sendable {
     case suffix = 1
     case prefix = 2
     case hideEnd = 3
@@ -10,7 +10,7 @@ public enum DataRuleKind: UInt32, Sendable {
     case replace = 7
 
     internal var cValue: nsdk_data_rule_kind_t {
-        nsdk_data_rule_kind_t(rawValue: rawValue)
+        nsdk_data_rule_kind_t(rawValue)
     }
 }
 

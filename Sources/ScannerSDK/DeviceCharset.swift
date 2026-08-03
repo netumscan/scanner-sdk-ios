@@ -13,7 +13,16 @@ public enum DeviceCharset: String, CaseIterable, Sendable {
         self.init(rawValue: normalized)
     }
 
-    public var displayName: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .utf8Word:
+            return "UTF-8 (Word)"
+        case .utf8Txt:
+            return "UTF-8 (Text)"
+        default:
+            return rawValue
+        }
+    }
 
     public var localizedLabel: DeviceCharsetLabel {
         switch self {
@@ -22,13 +31,13 @@ public enum DeviceCharset: String, CaseIterable, Sendable {
         case .gbk:
             return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.gbk", fallbackDisplayName: "GBK")
         case .utf8Word:
-            return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.utf8_word", fallbackDisplayName: "UTF8 (Word)")
+            return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.utf8_word", fallbackDisplayName: "UTF-8 (Word)")
         case .iso8859:
             return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.iso_iec_8859", fallbackDisplayName: "ISO/IEC 8859")
         case .normal:
             return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.normal", fallbackDisplayName: "Normal")
         case .utf8Txt:
-            return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.utf8_txt", fallbackDisplayName: "UTF8 (Txt)")
+            return DeviceCharsetLabel(localizationKey: "nsdk.device_charset.utf8_txt", fallbackDisplayName: "UTF-8 (Text)")
         }
     }
 }

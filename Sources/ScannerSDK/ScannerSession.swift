@@ -2,7 +2,6 @@ import Foundation
 import CNSDK
 
 public final class ScannerSession: @unchecked Sendable {
-    private static let maxBluetoothNameLength = 244
     public let handle: UInt64
     public let deviceId: String
     public let transportType: TransportType
@@ -10,18 +9,24 @@ public final class ScannerSession: @unchecked Sendable {
     private weak var sdk: ScannerSDK?
     private let stateHub = StreamHub<SessionState>()
     private let scanHub = StreamHub<ScanEvent>()
+    private let eventOverflowHub = StreamHub<EventOverflow>(capacity: 32)
     private let failureHub = StreamHub<SessionFailure>()
     private let initializationStageHub = StreamHub<SessionInitializationStageEvent>()
+    private let commandTraceHub = StreamHub<CommandTrace>()
     private let lock = NSLock()
+    private let operationQueue = DispatchQueue(label: "com.netumscan.scannersdk.session.operations")
     private var currentState: SessionState = .idle
     private var scanTextCharset: ScanTextCharset = .utf8
     private var scanTerminator: Data = Data([0x0D])
+    private var scanDroppedCount: UInt64 = 0
+    private var terminatedBySdkShutdown = false
 
     internal init(handle: UInt64, deviceId: String, transportType: TransportType, sdk: ScannerSDK) {
         self.handle = handle
         self.deviceId = deviceId
         self.transportType = transportType
         self.sdk = sdk
+        scanHub.setOnDrop { [weak self] in self?.recordScanOverflow() }
     }
 
     public var state: AsyncStream<SessionState> {
@@ -32,12 +37,20 @@ public final class ScannerSession: @unchecked Sendable {
         scanHub.makeStream()
     }
 
+    public var eventOverflows: AsyncStream<EventOverflow> {
+        eventOverflowHub.makeStream()
+    }
+
     public var failureEvents: AsyncStream<SessionFailure> {
         failureHub.makeStream()
     }
 
     public var initializationStages: AsyncStream<SessionInitializationStageEvent> {
         initializationStageHub.makeStream()
+    }
+
+    public var commandTraces: AsyncStream<CommandTrace> {
+        commandTraceHub.makeStream()
     }
 
     public var latestState: SessionState {
@@ -58,24 +71,30 @@ public final class ScannerSession: @unchecked Sendable {
         return scanTextCharset
     }
 
-    public func setScanTerminator(_ bytes: Data) throws {
-        try ensureReady("setScanTerminator")
-        precondition(!bytes.isEmpty, "terminator must not be empty")
+    public func setScanTextTerminator(_ bytes: Data) throws {
+        try ensureReady("setScanTextTerminator")
+        guard !bytes.isEmpty else {
+            throw DataRuleValidationError.empty("scan terminator")
+        }
         var mutable = bytes
         let code = mutable.withUnsafeMutableBytes { rawBuffer in
-            nsdk_set_scan_terminator(
+            nsdk_session_set_scan_text_terminator(
                 handle,
                 rawBuffer.bindMemory(to: UInt8.self).baseAddress,
                 UInt32(rawBuffer.count)
             )
         }
-        try nsdkCheck(code, operation: "setScanTerminator")
+        try nsdkCheck(code, operation: "setScanTextTerminator")
         lock.lock()
         scanTerminator = bytes
         lock.unlock()
     }
 
-    public func getScanTerminator() -> Data {
+    public func setScanTextTerminator(_ bytes: Data) async throws {
+        try await performNative { try self.setScanTextTerminator(bytes) }
+    }
+
+    public func getScanTextTerminator() -> Data {
         lock.lock()
         defer { lock.unlock() }
         return scanTerminator
@@ -83,19 +102,23 @@ public final class ScannerSession: @unchecked Sendable {
 
     public func refreshInfo() throws -> ScannerInfo {
         try ensureReady("refreshInfo")
-        var info = nsdk_scanner_info_t()
-        try nsdkCheck(nsdk_refresh_info(handle, &info), operation: "refreshInfo")
+        var info = makeNsdkScannerInfo()
+        try nsdkCheck(nsdk_session_refresh_scanner_info(handle, &info), operation: "refreshInfo")
         return makeScannerInfo(info)
     }
 
-    public func initializeSession(applyModelConfig: Bool = true) throws -> SessionInitializationResult {
-        try ensureReady("initializeSession")
-        var info = nsdk_scanner_info_t()
-        var batteryInfo = nsdk_battery_info_t()
+    public func refreshInfo() async throws -> ScannerInfo {
+        try await performNative { try self.refreshInfo() }
+    }
+
+    public func initialize() throws -> SessionInitializationResult {
+        try ensureReady("initialize")
+        var info = makeNsdkScannerInfo()
+        var batteryInfo = makeNsdkBatteryInfo()
         var modelConfigApplied: Int32 = 0
         try nsdkCheck(
-            nsdk_initialize_session(handle, applyModelConfig ? 1 : 0, &info, &batteryInfo, &modelConfigApplied),
-            operation: "initializeSession"
+            nsdk_session_initialize(handle, &info, &batteryInfo, &modelConfigApplied),
+            operation: "initialize"
         )
         let result = SessionInitializationResult(
             info: makeScannerInfo(info),
@@ -103,78 +126,209 @@ public final class ScannerSession: @unchecked Sendable {
             modelConfigApplied: modelConfigApplied != 0
         )
         emitDebug(
-            "initializeSession applyModelConfig=\(applyModelConfig) modelConfigApplied=\(result.modelConfigApplied) firmware=\(result.info.firmwareVersion) battery=\(result.batteryInfo.rawText)"
+            "initialize modelConfigApplied=\(result.modelConfigApplied) firmware=\(result.info.firmwareVersion) battery=\(result.batteryInfo.rawText)"
         )
         return result
     }
 
+    public func initialize() async throws -> SessionInitializationResult {
+        try await performNative { try self.initialize() }
+    }
+
     public func getCachedInfo() throws -> ScannerInfo {
         try ensureReady("getCachedInfo")
-        var info = nsdk_scanner_info_t()
-        try nsdkCheck(nsdk_get_cached_info(handle, &info), operation: "getCachedInfo")
+        var info = makeNsdkScannerInfo()
+        try nsdkCheck(nsdk_session_get_cached_scanner_info(handle, &info), operation: "getCachedInfo")
         return makeScannerInfo(info)
     }
 
-    public func getResolvedModelId() throws -> DeviceModelId {
-        try ensureReady("getResolvedModelId")
-        var modelID = nsdk_device_model_id_t(rawValue: 0)
-        try nsdkCheck(nsdk_get_resolved_model_id(handle, &modelID), operation: "getResolvedModelId")
-        let resolved = DeviceModelId(rawValue: modelID.rawValue) ?? .unknown
+    public func getResolvedModelKey() throws -> String {
+        try ensureReady("getResolvedModelKey")
+        var modelKey = [CChar](repeating: 0, count: 64)
+        try modelKey.withUnsafeMutableBufferPointer { buffer in
+            try nsdkCheck(
+                nsdk_session_get_resolved_model_key(handle, buffer.baseAddress, UInt32(buffer.count)),
+                operation: "getResolvedModelKey"
+            )
+        }
+        let resolved = String(cString: modelKey)
         emitDebug("resolvedModel=\(resolved)")
         return resolved
     }
 
-    public func setPreferredModel(
-        _ modelId: DeviceModelId,
-        applyDecoderModule: Bool = true
-    ) throws {
-        guard modelId != .unknown else {
-            throw ScannerError(code: -1, operation: "setPreferredModel requires non-unknown model")
-        }
-        try nsdkCheck(
-            nsdk_set_preferred_model(
-                handle,
-                nsdk_device_model_id_t(rawValue: modelId.rawValue),
-                applyDecoderModule ? 1 : 0
-            ),
-            operation: "setPreferredModel"
-        )
-        emitDebug("setPreferredModel model=\(modelId) applyDecoderModule=\(applyDecoderModule)")
-    }
-
     public func getDeviceCapabilitySummary() throws -> DeviceCapabilitySummary {
         try ensureReady("getDeviceCapabilitySummary")
-        var summary = nsdk_device_capability_summary_t()
+        var summary = makeNsdkDeviceCapabilitySummary()
         try nsdkCheck(
-            nsdk_get_device_capability_summary(handle, &summary),
+            nsdk_session_get_device_capability_summary(handle, &summary),
             operation: "getDeviceCapabilitySummary"
         )
-        let capability = makeDeviceCapabilitySummary(summary)
-        emitDebug("capability \(capability.displaySummary)")
-        emitCapabilityDiagnostics(capability)
+        let capability = DeviceCapabilitySummary(cValue: summary)
+        emitDebug("publicCapability \(capability.displaySummary)")
         return capability
     }
 
-    public func getOperationSupportSummary() throws -> SessionOperationSupportSummary {
-        try ensureReady("getOperationSupportSummary")
-        var support = nsdk_session_operation_support_t()
-        try nsdkCheck(
-            nsdk_get_session_operation_support(handle, &support),
-            operation: "getOperationSupportSummary"
+    public func getCapabilityDomains() throws -> [CapabilityDomain] {
+        try ensureReady("getCapabilityDomains")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "getCapabilityDomains requires active SDK")
+        }
+        return try sdk.getCapabilityDomains(modelKey: getResolvedModelKey(), transport: transportType)
+    }
+
+    public func getCapabilityLabels(kind: CapabilityLabelKind) throws -> [CapabilityLabel] {
+        try ensureReady("getCapabilityLabels")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "getCapabilityLabels requires active SDK")
+        }
+        return try sdk.getCapabilityLabels(kind: kind)
+    }
+
+    public func findCapabilityLabel(kind: CapabilityLabelKind, key: String, ownerKey: String = "") throws -> CapabilityLabel? {
+        try ensureReady("findCapabilityLabel")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "findCapabilityLabel requires active SDK")
+        }
+        return try sdk.findCapabilityLabel(kind: kind, key: key, ownerKey: ownerKey)
+    }
+
+    public func getCapabilityEntries() throws -> [CapabilityEntry] {
+        try ensureReady("getCapabilityEntries")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "getCapabilityEntries requires active SDK")
+        }
+        return try sdk.getCapabilityEntries(modelKey: getResolvedModelKey(), transport: transportType)
+    }
+
+    public func findCapabilityEntry(_ entryKey: String) throws -> CapabilityEntry? {
+        try ensureReady("findCapabilityEntry")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "findCapabilityEntry requires active SDK")
+        }
+        return try sdk.findCapabilityEntry(modelKey: getResolvedModelKey(), transport: transportType, entryKey: entryKey)
+    }
+
+    public func getSettingCodeEntries() throws -> [SettingCodeEntry] {
+        try ensureReady("getSettingCodeEntries")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "getSettingCodeEntries requires active SDK")
+        }
+        return try sdk.getSettingCodeEntries(modelKey: getResolvedModelKey(), transport: transportType)
+    }
+
+    public func findSettingCodeEntry(_ entryKey: String) throws -> SettingCodeEntry? {
+        try ensureReady("findSettingCodeEntry")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "findSettingCodeEntry requires active SDK")
+        }
+        return try sdk.findSettingCodeEntry(modelKey: getResolvedModelKey(), transport: transportType, entryKey: entryKey)
+    }
+
+    public func buildSettingCode(_ entryKey: String, value: Data = Data()) throws -> SettingCodeResult {
+        try ensureReady("buildSettingCode")
+        guard let sdk else {
+            throw ScannerError(code: -1, operation: "buildSettingCode requires active SDK")
+        }
+        return try sdk.buildSettingCode(modelKey: getResolvedModelKey(), transport: transportType, entryKey: entryKey, value: value)
+    }
+
+    public func readCapabilityValue(_ entryKey: String) throws -> CapabilityValue {
+        try ensureReady("readCapabilityValue")
+        let entry = try resolveCapabilityEntry(entryKey, operation: "readCapabilityValue")
+        guard entry.kind == .setting && entry.supportsRead else {
+            throw ScannerError(code: -1, operation: "readCapabilityValue unsupported entry=\(entryKey)")
+        }
+        var result = makeNsdkCapabilityValueResult()
+        try entryKey.withCString { cEntryKey in
+            try nsdkCheck(
+                nsdk_session_read_capability_value(handle, cEntryKey, &result),
+                operation: "readCapabilityValue"
+            )
+        }
+        guard result.value_available != 0 else {
+            throw ScannerError(code: 11, operation: "readCapabilityValue")
+        }
+        var mutableResult = result
+        defer { nsdk_capability_value_result_dispose(&mutableResult) }
+        let valueBytes = try copyBytes(
+            copy: { buffer, capacity, outLength in
+                nsdk_capability_value_result_copy_full_value_bytes(&mutableResult, buffer, capacity, outLength)
+            },
+            operation: "readCapabilityValue.copyValueBytes"
         )
-        return SessionOperationSupportSummary(
+        return try decodeCapabilityValue(entry, bytes: valueBytes)
+    }
+
+    public func writeCapabilityValue(
+        _ entryKey: String,
+        value: CapabilityValue,
+        persist: Bool = true
+    ) throws -> CommandResponse {
+        try ensureReady("writeCapabilityValue")
+        let entry = try resolveCapabilityEntry(entryKey, operation: "writeCapabilityValue")
+        guard entry.kind == .setting && entry.supportsWrite else {
+            throw ScannerError(code: -1, operation: "writeCapabilityValue unsupported entry=\(entryKey)")
+        }
+        let valueBytes = try encodeCapabilityValue(entry, value: value)
+        var response = makeNsdkCommandResponse()
+        let payload = valueBytes
+        var request = makeNsdkCapabilityWriteRequest()
+        request.value_size = UInt32(payload.count)
+        request.persist = persist ? 1 : 0
+        try entryKey.withCString { cEntryKey in
+            let code = payload.withUnsafeBytes { payloadBuffer in
+                request.entry_key = cEntryKey
+                request.value_bytes = payloadBuffer.bindMemory(to: UInt8.self).baseAddress
+                return nsdk_session_write_capability_value(
+                    handle,
+                    &request,
+                    &response
+                )
+            }
+            try nsdkCheck(code, operation: "writeCapabilityValue")
+        }
+        return try makeCommandResponse(response)
+    }
+
+    public func executeCapabilityAction(
+        _ entryKey: String,
+        value: Data = Data()
+    ) throws -> CommandResponse {
+        try ensureReady("executeCapabilityAction")
+        let entry = try resolveCapabilityEntry(entryKey, operation: "executeCapabilityAction")
+        guard entry.kind == .action && entry.supportsExecute else {
+            throw ScannerError(code: -1, operation: "executeCapabilityAction unsupported entry=\(entryKey)")
+        }
+        var request = makeNsdkCapabilityActionRequest()
+        request.value_size = UInt32(value.count)
+        let payload = value
+        var response = makeNsdkCommandResponse()
+        try entryKey.withCString { cEntryKey in
+            let code = payload.withUnsafeBytes { payloadBuffer in
+                request.entry_key = cEntryKey
+                request.value_bytes = payloadBuffer.bindMemory(to: UInt8.self).baseAddress
+                return nsdk_session_execute_capability_action(handle, &request, &response)
+            }
+            try nsdkCheck(code, operation: "executeCapabilityAction")
+        }
+        return try makeCommandResponse(response)
+    }
+
+    public func getOperationSupport() throws -> SessionOperationSupport {
+        try ensureReady("getOperationSupport")
+        var support = makeNsdkSessionOperationSupport()
+        try nsdkCheck(
+            nsdk_session_get_operation_support(handle, &support),
+            operation: "getOperationSupport"
+        )
+        return SessionOperationSupport(
             supportsRefreshInfo: support.supports_refresh_info != 0,
             supportsInitializeSession: support.supports_initialize_session != 0,
             supportsGetBatteryInfo: support.supports_get_battery_info != 0,
-            supportsExecuteBasicDeviceCommands: support.supports_execute_basic_device_commands != 0,
-            supportsExecuteTextCommands: support.supports_execute_text_commands != 0,
-            supportsExecuteDataRuleCommands: support.supports_execute_data_rule_commands != 0,
-            supportsDefaultModuleCommandProbe: support.supports_default_module_command_probe != 0,
+            supportsApplyDataRule: support.supports_apply_data_rule != 0,
             supportsTriggerScan: support.supports_trigger_scan != 0,
-            supportsBeep: support.supports_beep != 0,
-            supportsDisableAckBeep: support.supports_disable_ack_beep != 0,
-            supportsVibrateOn: support.supports_vibrate_on != 0,
-            supportsVibrateOff: support.supports_vibrate_off != 0
+            supportsSetAckBeepEnabled: support.supports_set_ack_beep_enabled != 0,
+            supportsSetVibrationEnabled: support.supports_set_vibration_enabled != 0
         )
     }
 
@@ -196,25 +350,9 @@ public final class ScannerSession: @unchecked Sendable {
             versionChipsetCode: stringFromCStringBuffer(info.version_chipset_code),
             versionChipsetSuffix: stringFromCStringBuffer(info.version_chipset_suffix),
             versionReleaseCode: stringFromCStringBuffer(info.version_release_code),
-            versionExtensionCode: stringFromCStringBuffer(info.version_extension_code)
-        )
-    }
-
-    internal func makeDeviceCapabilitySummary(_ summary: nsdk_device_capability_summary_t) -> DeviceCapabilitySummary {
-        DeviceCapabilitySummary(
-            modelId: DeviceModelId(rawValue: summary.model_id.rawValue) ?? .unknown,
-            modelName: stringFromCStringBuffer(summary.model_name),
-            defaultCommandSet: CommandSetKind(rawValue: summary.default_command_set.rawValue) ?? .unknown,
-            formFactor: DeviceFormFactor(rawValue: summary.form_factor.rawValue) ?? .unknown,
-            moduleFamily: ModuleFamily(rawValue: summary.module_family.rawValue) ?? .unknown,
-            supportsBasicDeviceCommands: summary.supports_basic_device_commands != 0,
-            supportsMasterCommands: summary.supports_master_commands != 0,
-            supportsNativeModuleCommands: summary.supports_native_module_commands != 0,
-            supportsModuleCommandBridge: summary.supports_module_command_bridge != 0,
-            supportsModuleCommands: summary.supports_module_commands != 0,
-            supportsScannerMaster: summary.supports_scanner_master != 0,
-            supportsModulePassthrough: summary.supports_module_passthrough != 0,
-            supportStatus: SupportStatus(rawValue: summary.support_status.rawValue) ?? .unknown
+            versionExtensionCode: stringFromCStringBuffer(info.version_extension_code),
+            bluetoothName: stringFromCStringBuffer(info.bluetooth_name),
+            bluetoothFirmwareVersion: stringFromCStringBuffer(info.bluetooth_firmware_version)
         )
     }
 
@@ -226,18 +364,32 @@ public final class ScannerSession: @unchecked Sendable {
         )
     }
 
+    internal func makeStorageUsage(_ usage: nsdk_storage_usage_t) -> StorageUsage {
+        StorageUsage(
+            barcodeCount: Int(usage.barcode_count),
+            used: Int(usage.used),
+            capacity: Int(usage.capacity),
+            remaining: Int(usage.remaining),
+            rawText: stringFromCStringBuffer(usage.raw_text)
+        )
+    }
+
     public func getBatteryInfo() throws -> BatteryInfo {
         try ensureReady("getBatteryInfo")
-        var info = nsdk_battery_info_t()
-        try nsdkCheck(nsdk_get_battery_info(handle, &info), operation: "getBatteryInfo")
+        var info = makeNsdkBatteryInfo()
+        try nsdkCheck(nsdk_session_get_battery_info(handle, &info), operation: "getBatteryInfo")
         return makeBatteryInfo(info)
+    }
+
+    public func getBatteryInfo() async throws -> BatteryInfo {
+        try await performNative { try self.getBatteryInfo() }
     }
 
     public func getCachedBatteryInfo() throws -> BatteryInfo? {
         try ensureReady("getCachedBatteryInfo")
-        var info = nsdk_battery_info_t()
+        var info = makeNsdkBatteryInfo()
         let batteryInfo = try nsdkLookupOrNil(
-            nsdk_get_cached_battery_info(handle, &info),
+            nsdk_session_get_cached_battery_info(handle, &info),
             operation: "getCachedBatteryInfo"
         ) {
             makeBatteryInfo(info)
@@ -250,72 +402,52 @@ public final class ScannerSession: @unchecked Sendable {
         return batteryInfo
     }
 
-    public func executeBasicDeviceCommand(_ command: BasicDeviceCommand) throws -> CommandResponse {
-        try ensureReady("executeBasicDeviceCommand")
-        var response = nsdk_command_response_t()
-        try nsdkCheck(
-            nsdk_execute_basic_device_command(handle, command.cValue, &response),
-            operation: "executeBasicDeviceCommand"
-        )
-        return try makeCommandResponse(response)
-    }
-
-    public func executeMasterCommand(_ commandID: Int32) throws -> CommandResponse {
-        try ensureReady("executeMasterCommand")
-        var response = nsdk_command_response_t()
-        try nsdkCheck(
-            nsdk_execute_master_command(handle, commandID, &response),
-            operation: "executeMasterCommand"
-        )
-        return try makeCommandResponse(response)
-    }
-
-    public func executeMasterCommand(_ command: MasterCommand) throws -> CommandResponse {
-        try executeMasterCommand(command.cValue)
-    }
-
-    public func executeTextCommand(_ commandText: String) throws -> CommandResponse {
-        try ensureReady("executeTextCommand")
-        precondition(!commandText.isEmpty, "commandText must not be empty")
-        var response = nsdk_command_response_t()
-        try commandText.withCString { cText in
-            try nsdkCheck(
-                nsdk_execute_text_command(handle, cText, &response),
-                operation: "executeTextCommand"
-            )
-        }
-        return try makeCommandResponse(response)
+    public func getStorageUsage() throws -> StorageUsage {
+        try ensureReady("getStorageUsage")
+        var usage = makeNsdkStorageUsage()
+        try nsdkCheck(nsdk_session_get_storage_usage(handle, &usage), operation: "getStorageUsage")
+        return makeStorageUsage(usage)
     }
 
     public func setBluetoothName(_ name: String) throws -> CommandResponse {
-        precondition(!name.isEmpty, "name must not be empty")
-        precondition(name.utf8.count <= Self.maxBluetoothNameLength, "name must not exceed \(Self.maxBluetoothNameLength) bytes")
-        precondition(name.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value <= 0x7E }, "name must contain only printable ASCII characters")
-        return try executeTextCommand("AT+NAME=\(name)")
+        try executeCapabilityAction("action.SetBluetoothName", value: Data(name.utf8))
+    }
+
+    public func setBluetoothName(_ name: String) async throws -> CommandResponse {
+        try await performNative { try self.setBluetoothName(name) }
     }
 
     public func setTimestamp(_ date: Date = Date(), timeZone: TimeZone = .current) throws -> CommandResponse {
-        let adjusted = date.addingTimeInterval(1)
-        let offsetSeconds = Int64(timeZone.secondsFromGMT(for: adjusted))
-        let protocolTimestamp = Int64(adjusted.timeIntervalSince1970.rounded()) + offsetSeconds
-        precondition(protocolTimestamp > 0, "date must resolve to a positive RTCSTAMP value")
-        return try executeTextCommand("%RTCSTAMP#\(protocolTimestamp)")
+        let offsetLookupDate = date.addingTimeInterval(1)
+        let unixMillis = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        let offsetSeconds = Int32(timeZone.secondsFromGMT(for: offsetLookupDate))
+        var response = makeNsdkCommandResponse()
+        try nsdkCheck(
+            nsdk_session_set_rtc_timestamp(handle, unixMillis, offsetSeconds, &response),
+            operation: "setTimestamp"
+        )
+        return try makeCommandResponse(response)
     }
 
-    public func executeDataRuleCommand(
-        kind: DataRuleKind,
-        primary: Data,
-        secondary: Data = Data()
-    ) throws -> CommandResponse {
-        try ensureReady("executeDataRuleCommand")
-        var response = nsdk_command_response_t()
-        var primaryCopy = primary
-        var secondaryCopy = secondary
-        let code = primaryCopy.withUnsafeMutableBytes { primaryBuffer in
-            secondaryCopy.withUnsafeMutableBytes { secondaryBuffer in
-                nsdk_execute_data_rule_command(
+    public func setAckBeepEnabled(_ enabled: Bool) throws -> CommandResponse {
+        try writeCapabilityValue("setting.SetAckBeepEnabled", value: .boolean(enabled))
+    }
+
+    public func setVibrationEnabled(_ enabled: Bool) throws -> CommandResponse {
+        try writeCapabilityValue("setting.SetVibrationEnabled", value: .boolean(enabled))
+    }
+
+    public func applyDataRule(_ rule: DataRule) throws -> CommandResponse {
+        try ensureReady("applyDataRule")
+        var response = makeNsdkCommandResponse()
+        let payload = rule.cPayload
+        var primary = payload.primary
+        var secondary = payload.secondary
+        let code = primary.withUnsafeMutableBytes { primaryBuffer in
+            secondary.withUnsafeMutableBytes { secondaryBuffer in
+                nsdk_session_apply_data_rule(
                     handle,
-                    kind.cValue,
+                    payload.kind.cValue,
                     primaryBuffer.bindMemory(to: UInt8.self).baseAddress,
                     UInt32(primaryBuffer.count),
                     secondaryBuffer.bindMemory(to: UInt8.self).baseAddress,
@@ -324,164 +456,68 @@ public final class ScannerSession: @unchecked Sendable {
                 )
             }
         }
-        try nsdkCheck(code, operation: "executeDataRuleCommand")
+        try nsdkCheck(code, operation: "applyDataRule")
         return try makeCommandResponse(response)
     }
 
-    public func executeModuleCommand(
-        family: ModuleFamily,
-        kind: ModuleCommandKind,
-        parameterID: UInt32 = 0,
-        payload: Data = Data(),
-        persist: Bool = false
-    ) throws -> CommandResponse {
-        try ensureReady("executeModuleCommand")
-        var response = nsdk_command_response_t()
-        var payloadCopy = payload
-        let code = payloadCopy.withUnsafeMutableBytes { payloadBuffer in
-            nsdk_execute_module_command(
-                handle,
-                family.cValue,
-                kind.cValue,
-                parameterID,
-                payloadBuffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt32(payloadBuffer.count),
-                persist ? 1 : 0,
-                &response
-            )
-        }
-        try nsdkCheck(code, operation: "executeModuleCommand")
-        return try makeCommandResponse(response)
-    }
-
-    public func executeModuleRawFrame(
-        family: ModuleFamily,
-        frame: Data
-    ) throws -> CommandResponse {
-        try ensureReady("executeModuleRawFrame")
-        precondition(!frame.isEmpty, "frame must not be empty")
-        var response = nsdk_command_response_t()
-        var frameCopy = frame
-        let code = frameCopy.withUnsafeMutableBytes { frameBuffer in
-            nsdk_execute_module_raw_frame(
-                handle,
-                family.cValue,
-                frameBuffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt32(frameBuffer.count),
-                &response
-            )
-        }
-        try nsdkCheck(code, operation: "executeModuleRawFrame")
-        return try makeCommandResponse(response)
-    }
-
-    public func canExecuteMasterCommand(_ commandID: Int32) throws -> Bool {
-        try ensureReady("canExecuteMasterCommand")
-        var supported: Int32 = 0
-        try nsdkCheck(
-            nsdk_can_execute_master_command(handle, commandID, &supported),
-            operation: "canExecuteMasterCommand"
-        )
-        let result = supported != 0
-        emitDebug("masterCommandProbe command=\(commandID) supported=\(result)")
-        return result
-    }
-
-    public func canExecuteMasterCommand(_ command: MasterCommand) throws -> Bool {
-        try canExecuteMasterCommand(command.cValue)
-    }
-
-    public func canExecuteModuleCommand(
-        family: ModuleFamily,
-        kind: ModuleCommandKind,
-        parameterID: UInt32 = 0,
-        persist: Bool = false
-    ) throws -> Bool {
-        try ensureReady("canExecuteModuleCommand")
-        var supported: Int32 = 0
-        try nsdkCheck(
-            nsdk_can_execute_module_command(
-                handle,
-                family.cValue,
-                kind.cValue,
-                parameterID,
-                persist ? 1 : 0,
-                &supported
-            ),
-            operation: "canExecuteModuleCommand"
-        )
-        let result = supported != 0
-        emitDebug(
-            "moduleCommandProbe family=\(family) kind=\(kind) parameterID=\(parameterID) persist=\(persist) supported=\(result)"
-        )
-        return result
-    }
-
-    public func canExecuteDefaultModuleCommandProbe(
-        family: ModuleFamily
-    ) throws -> Bool {
-        try ensureReady("canExecuteDefaultModuleCommandProbe")
-        var supported: Int32 = 0
-        try nsdkCheck(
-            nsdk_can_execute_default_module_command_probe(handle, family.cValue, &supported),
-            operation: "canExecuteDefaultModuleCommandProbe"
-        )
-        let result = supported != 0
-        emitDebug("defaultModuleProbe family=\(family) supported=\(result)")
-        if !result {
-            emitDebug("capability-warning defaultModuleProbeUnavailable family=\(family)")
-        }
-        return result
+    public func applyDataRule(_ rule: DataRule) async throws -> CommandResponse {
+        try await performNative { try self.applyDataRule(rule) }
     }
 
     public func triggerScan() throws {
-        try ensureReady("triggerScan")
-        try nsdkCheck(nsdk_trigger_scan(handle), operation: "triggerScan")
+        _ = try executeCapabilityAction("action.TriggerScan")
     }
 
-    public func beep() throws {
-        try ensureReady("beep")
-        try nsdkCheck(nsdk_beep(handle), operation: "beep")
-    }
-
-    public func disableAckBeep() throws {
-        try ensureReady("disableAckBeep")
-        try nsdkCheck(nsdk_disable_ack_beep(handle), operation: "disableAckBeep")
-    }
-
-    public func vibrateOn() throws {
-        try ensureReady("vibrateOn")
-        try nsdkCheck(nsdk_vibrate_on(handle), operation: "vibrateOn")
-    }
-
-    public func vibrateOff() throws {
-        try ensureReady("vibrateOff")
-        try nsdkCheck(nsdk_vibrate_off(handle), operation: "vibrateOff")
+    public func triggerScan() async throws {
+        try await performNative { try self.triggerScan() }
     }
 
     public func disconnect() throws {
-        try nsdkCheck(nsdk_disconnect(handle), operation: "disconnect")
+        try ensureNotTerminated("disconnect")
+        defer { onStateChanged(.disconnected) }
+        try nsdkCheck(nsdk_session_disconnect(handle), operation: "disconnect")
+    }
+
+    public func disconnect() async throws {
+        try await performNative { try self.disconnect() }
+    }
+
+    private func performNative<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            operationQueue.async {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     internal func waitUntilReady(timeoutMilliseconds: UInt32 = 10_000) throws {
         try nsdkCheck(
-            nsdk_wait_until_ready(handle, timeoutMilliseconds),
+            nsdk_session_wait_until_ready(handle, timeoutMilliseconds),
             operation: "waitUntilReady"
         )
     }
 
     internal func onStateChanged(_ state: SessionState) {
         lock.lock()
+        if terminatedBySdkShutdown {
+            lock.unlock()
+            return
+        }
         currentState = state
         lock.unlock()
         emitDebug("state=\(state)")
         stateHub.yield(state)
-        if state == .disconnected {
+        if state == .disconnected || state == .error {
             sdk?.removeSession(handle: handle)
         }
     }
 
     internal func onScanEvent(timestampMs: UInt64, barcodeType: Int32, textBytes: Data, rawBytes: Data) {
+        guard !isTerminatedBySdkShutdown else { return }
         let charset = getScanTextCharset()
         let text = String(data: textBytes, encoding: charset.encoding) ?? String(decoding: textBytes, as: UTF8.self)
         scanHub.yield(
@@ -496,20 +532,105 @@ public final class ScannerSession: @unchecked Sendable {
     }
 
     internal func onFailure(_ failure: SessionFailure) {
+        guard !isTerminatedBySdkShutdown else { return }
         emitDebug(
-            "failure transport=\(failure.transportType) code=\(failure.code) issue=\(String(describing: failure.bleTransportIssue)) platformError=\(String(describing: failure.platformErrorCode))"
+            "failure transport=\(failure.transportType) issue=\(failure.issue) platformError=\(String(describing: failure.platformErrorCode))"
         )
         failureHub.yield(failure)
     }
 
     internal func onInitializationStage(_ event: SessionInitializationStageEvent) {
+        guard !isTerminatedBySdkShutdown else { return }
         emitDebug(
             "initializeSession stage=\(event.stage) trace=\(event.traceId) success=\(event.success) error=\(event.errorCode) message=\(event.message ?? "")"
         )
         initializationStageHub.yield(event)
     }
 
+    internal func onCommandTrace(_ trace: CommandTrace) {
+        guard !isTerminatedBySdkShutdown else { return }
+        commandTraceHub.yield(trace)
+    }
+
+    internal func terminateForSdkShutdown() {
+        lock.lock()
+        let shouldPublishDisconnected = !terminatedBySdkShutdown && currentState != .disconnected
+        terminatedBySdkShutdown = true
+        currentState = .disconnected
+        lock.unlock()
+
+        if shouldPublishDisconnected {
+            emitDebug("state=disconnected (SDK shutdown)")
+            stateHub.yield(.disconnected)
+        }
+        stateHub.finish()
+        scanHub.finish()
+        eventOverflowHub.finish()
+        failureHub.finish()
+        initializationStageHub.finish()
+        commandTraceHub.finish()
+    }
+
+    private func recordScanOverflow() {
+        lock.lock()
+        scanDroppedCount += 1
+        let count = scanDroppedCount
+        lock.unlock()
+        eventOverflowHub.yield(EventOverflow(source: .scan, droppedCount: count))
+    }
+
+    private func resolveCapabilityEntry(_ entryKey: String, operation: String) throws -> CapabilityEntry {
+        try ensureReady(operation)
+        guard !entryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ScannerError(code: -1, operation: "\(operation) requires non-empty capability entry key")
+        }
+        guard let entry = try findCapabilityEntry(entryKey) else {
+            throw ScannerError(code: -1, operation: "\(operation) unknown capability entry=\(entryKey)")
+        }
+        return entry
+    }
+
+    private func decodeCapabilityValue(_ entry: CapabilityEntry, bytes: Data) throws -> CapabilityValue {
+        switch entry.valueKind {
+        case .boolean:
+            guard bytes.count == 1 else {
+                throw ScannerError(code: -1, operation: "readCapabilityValue expected single-byte boolean response")
+            }
+            return .boolean(bytes.first != 0x00)
+        case .bytesAscii:
+            let text = String(data: bytes, encoding: .ascii) ?? String(decoding: bytes, as: UTF8.self)
+            return CapabilityValue(kind: .bytesAscii, bytes: bytes, textValue: text)
+        default:
+            return .bytes(entry.valueKind, bytes)
+        }
+    }
+
+    private func encodeCapabilityValue(_ entry: CapabilityEntry, value: CapabilityValue) throws -> Data {
+        if entry.valueKind == .boolean {
+            if let booleanValue = value.booleanValue {
+                return Data([booleanValue ? 0x01 : 0x00])
+            }
+            if value.bytes.count == 1 {
+                return value.bytes
+            }
+            throw ScannerError(code: -1, operation: "writeCapabilityValue boolean value requires Bool or one byte")
+        }
+
+        if entry.valueKind == .bytesAscii, let textValue = value.textValue {
+            return Data(textValue.utf8)
+        }
+
+        if value.kind != entry.valueKind && value.kind != .custom && value.kind != .unknown {
+            throw ScannerError(
+                code: -1,
+                operation: "writeCapabilityValue value kind \(value.kind) does not match entry kind \(entry.valueKind)"
+            )
+        }
+        return value.bytes
+    }
+
     private func ensureReady(_ operation: String) throws {
+        try ensureNotTerminated(operation)
         let state = latestState
         guard state == .ready else {
             emitDebug("reject \(operation) requiresReady actual=\(state)")
@@ -517,69 +638,45 @@ public final class ScannerSession: @unchecked Sendable {
         }
     }
 
+    private var isTerminatedBySdkShutdown: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminatedBySdkShutdown
+    }
+
+    private func ensureNotTerminated(_ operation: String) throws {
+        guard !isTerminatedBySdkShutdown else {
+            throw ScannerError(code: -1, operation: "\(operation) unavailable after SDK shutdown")
+        }
+    }
+
     private func emitDebug(_ message: String) {
         sdk?.emitDebug("session[\(handle)] \(message)")
     }
 
-    private func emitCapabilityDiagnostics(_ capability: DeviceCapabilitySummary) {
-        for message in capabilityDiagnostics(capability) {
-            emitDebug(message)
-        }
-    }
-
-    internal func capabilityDiagnostics(_ capability: DeviceCapabilitySummary) -> [String] {
-        var messages: [String] = []
-        if capability.supportStatus != .verified {
-            messages.append("capability-warning supportStatus=\(capability.supportStatus)")
-        }
-        if capability.supportsModuleCommands {
-            if !capability.supportsNativeModuleCommands && !capability.supportsModuleCommandBridge {
-                messages.append("capability-warning moduleCommandsWithoutNativeOrBridge family=\(capability.moduleFamily)")
-            }
-        } else if capability.moduleFamily != .unknown {
-            messages.append("capability-warning moduleFamily=\(capability.moduleFamily) but moduleCommands=false")
-        }
-        if capability.supportsModulePassthrough && !capability.supportsModuleCommands {
-            messages.append("capability-warning passthroughOnly family=\(capability.moduleFamily)")
-        }
-        return messages
-    }
-
     private func makeCommandResponse(_ response: nsdk_command_response_t) throws -> CommandResponse {
         var mutableResponse = response
+        defer { nsdk_command_response_dispose(&mutableResponse) }
         let textBytes = try copyBytes(
-            expectedLength: mutableResponse.text_size,
             copy: { buffer, capacity, outLength in
-                nsdk_command_response_copy_text_bytes(&mutableResponse, buffer, capacity, outLength)
+                nsdk_command_response_copy_full_text_bytes(&mutableResponse, buffer, capacity, outLength)
             },
             operation: "commandResponse.copyTextBytes"
         )
 
         let rawBytes = try copyBytes(
-            expectedLength: mutableResponse.raw_size,
             copy: { buffer, capacity, outLength in
-                nsdk_command_response_copy_raw_bytes(&mutableResponse, buffer, capacity, outLength)
+                nsdk_command_response_copy_full_raw_bytes(&mutableResponse, buffer, capacity, outLength)
             },
             operation: "commandResponse.copyRawBytes"
-        )
-        let modulePayloadBytes = try copyBytes(
-            expectedLength: mutableResponse.module_payload_size,
-            copy: { buffer, capacity, outLength in
-                nsdk_command_response_copy_module_payload_bytes(&mutableResponse, buffer, capacity, outLength)
-            },
-            operation: "commandResponse.copyModulePayloadBytes"
-        )
-        let moduleParameterValueBytes = try copyBytes(
-            expectedLength: mutableResponse.module_parameter_value_size,
-            copy: { buffer, capacity, outLength in
-                nsdk_command_response_copy_module_parameter_value_bytes(&mutableResponse, buffer, capacity, outLength)
-            },
-            operation: "commandResponse.copyModuleParameterValueBytes"
         )
         let collector = RecordCollector()
         let pointer = Unmanaged.passRetained(collector).toOpaque()
         defer { Unmanaged<RecordCollector>.fromOpaque(pointer).release() }
-        nsdk_command_response_for_each_record(&mutableResponse, nsdk_swift_record_callback, pointer)
+        try nsdkCheck(
+            nsdk_command_response_for_each_record(&mutableResponse, nsdk_swift_record_callback, pointer),
+            operation: "commandResponse.forEachRecord"
+        )
         return CommandResponse(
             textBytes: textBytes,
             textFullSize: Int(mutableResponse.text_full_size),
@@ -588,13 +685,7 @@ public final class ScannerSession: @unchecked Sendable {
             acknowledged: mutableResponse.acknowledged != 0,
             recordCount: Int(mutableResponse.record_count),
             recordBytes: collector.records,
-            recordsComplete: mutableResponse.records_complete != 0,
-            modulePayloadBytes: modulePayloadBytes,
-            modulePayloadFullSize: Int(mutableResponse.module_payload_full_size),
-            moduleParameterID: Int(mutableResponse.module_parameter_id),
-            moduleParameterValueBytes: moduleParameterValueBytes,
-            moduleParameterValueFullSize: Int(mutableResponse.module_parameter_value_full_size),
-            moduleParameterValueAvailable: mutableResponse.module_parameter_value_available != 0
+            recordsComplete: mutableResponse.records_complete != 0
         )
     }
 }
