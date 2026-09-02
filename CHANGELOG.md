@@ -1,46 +1,34 @@
-# Scanner SDK Mobile Release 1.0.0
+# Scanner SDK Mobile Release 1.1.0
 
 ## Highlights
 
-- Stable Android Kotlin and Apple Swift product-facing APIs.
-- BLE GATT discovery, connection, scan events, device information, battery,
-  capability entries, semantic commands, and structured failure reporting.
-- Native ABI `1.0.0` (`0x010000`) with frozen C symbols and structure layouts.
-- Android Maven artifacts contain binary AAR integration materials without
-  private wrapper, JNI, protocol-kernel, or adapter sources.
-- Demo applications are published as source in
-  `netumscan/scanner-sdk-samples`; no APK, AAB, IPA, TestFlight, or app-store
-  package is distributed.
+- Adds `L6BL`, `DS5000`, `E740`, `W28`, `CS7505`, `U820`, `X-6800`,
+  `RD-I8`, `CS8515`, and `RW-185` to the scanner model catalog.
+- Maps the new models to the confirmed `NTC06H`, `NT212X`, `NT280H`, or
+  `SE4750` module-family template from the V4.1 standard BOM.
+- Exposes the new models through the existing Android Kotlin and Apple Swift
+  model, capability-entry, and setting-code-entry APIs.
 
-## Breaking Migration
+## Compatibility
 
-- Applications upgrading from `0.x` must use canonical capability and
-  setting-code keys returned by the SDK; historical raw keys and aliases are
-  not accepted.
-- Android callers should inspect `ScannerException.discoveryFailure` for a
-  synchronous discovery-start failure and continue observing
-  `ScannerSdk.discoveryFailures` for asynchronous failures.
-- Android, Apple, and other wrappers must be paired with the `1.0.0` native
-  runtime. Mixing `0.x` and `1.0.0` binaries is unsupported.
+- Product version: `1.1.0`.
+- Native C ABI remains `1.0.0` (`0x010000`); frozen symbols and structure
+  layouts are unchanged.
+- Android Kotlin and Apple Swift public API baselines are unchanged, so no
+  source migration is required from `1.0.0`.
+- Use the wrapper, C headers, and native binary from the same `1.1.0` package.
 
-## Supported Mobile Scope
+## Model Status
 
-- Android 8.0+ (`minSdk 26`), BLE GATT primary transport.
-- iOS 15+ and macOS 12+, BLE GATT primary transport.
-- Android SPP Classic remains a compatibility skeleton and is not part of the
-  mobile `1.0.0` support commitment.
-
-## Release Evidence
-
-The release commit, workflow runs, artifact SHA-256 values, Maven coordinate,
-SwiftPM URL, and Android/iPhone compatibility records are recorded in the
-release assets and point to the same `1.0.0` source commit.
+All ten added models are `CodeOnly`. Model resolution, template mapping,
+transport enumeration, and capability/setting-code catalog access are covered
+by automated tests. This status does not claim device verification.
 
 ## Known Device Limitation
 
 On the tested `CS7501` combination with main firmware
-`bd3rCS_RFSBTWD45hb_G616p2` and hardware `GD32F350`, the following Full Read
-items can return no response or an unparseable response:
+`bd3rCS_RFSBTWD45hb_G616p2` and hardware `GD32F350`, the following items remain
+classified as a device/firmware limitation:
 
 - `DisablePassiveTriggerScan`
 - `HanXinInverseDecodeMode`
@@ -50,7 +38,5 @@ items can return no response or an unparseable response:
 - `SuppressDuplicateInDecodeCycle`
 - `TransportMode`
 
-These results are classified as device/firmware limitations, not SDK API
-defects. The SDK session remains usable and a following normal command
-succeeds. The scope must not be generalized to other CS7501 firmware or
-hardware combinations.
+The scope must not be generalized to other firmware, hardware, or scanner
+models.

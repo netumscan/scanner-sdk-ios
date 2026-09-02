@@ -2,13 +2,13 @@
 
 ## Installation
 
-Add the public SwiftPM package from version `1.0.0`:
+Add the public SwiftPM package from version `1.1.0`:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/netumscan/scanner-sdk-ios.git",
-        from: "1.0.0"
+        from: "1.1.0"
     )
 ]
 ```
@@ -21,6 +21,37 @@ Supported deployment targets:
 - iOS 15+
 - macOS 12+
 - BLE GATT is the supported mobile transport.
+
+## Native Compatibility
+
+The versioned XCFramework contains these supported slices:
+
+| Target | Architectures | Deployment target |
+| --- | --- | --- |
+| iOS device | `arm64` | iOS 15 |
+| iOS Simulator | `arm64`, `x86_64` | iOS 15 |
+| macOS | `arm64` | macOS 12 |
+
+An XCFramework slice controls platform and CPU compatibility. The Scanner SDK
+C ABI separately controls whether the Swift wrapper can safely call the native
+runtime. `ScannerSDK.shared.initialize()` automatically checks required ABI
+`0x010000` before native initialization and callback installation.
+
+Applications do not need to call the low-level C ABI. Do not combine Swift
+sources or C headers from one release with an XCFramework from another release.
+Use the complete SwiftPM tag and its checksum-pinned binary target.
+
+If integration fails:
+
+- A SwiftPM checksum or binary-target resolution error means the URL, version,
+  checksum, and downloaded archive do not describe the same release.
+- An Xcode platform or architecture error means the target is outside the
+  slices above. Mac Catalyst is not currently supported.
+- `native ABI mismatch required=... actual=...` means the Swift wrapper/C
+  headers and XCFramework are mixed across releases. Restore one complete tag;
+  do not bypass the check.
+- A `ScannerError` returned by native initialization means slice and ABI checks
+  succeeded; diagnose it by stable code and operation.
 
 ## Required Info.plist Description
 

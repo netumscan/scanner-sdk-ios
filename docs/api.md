@@ -18,3 +18,7 @@
 
 Handle `ScannerError` by its stable SDK code and operation. Observe asynchronous
 SDK/session failures as part of the application lifecycle.
+
+Native ABI compatibility is enforced automatically before SDK initialization.
+See [Apple native compatibility](ios.md#native-compatibility) for supported
+XCFramework slices and load-versus-version troubleshooting.
