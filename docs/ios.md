@@ -2,13 +2,13 @@
 
 ## Installation
 
-Add the public SwiftPM package from version `1.1.0`:
+Add the public SwiftPM package from version `1.1.1`:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/netumscan/scanner-sdk-ios.git",
-        from: "1.1.0"
+        from: "1.1.1"
     )
 ]
 ```

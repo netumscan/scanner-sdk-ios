@@ -1,28 +1,22 @@
-# Scanner SDK Mobile Release 1.1.0
+# Scanner SDK Mobile Release 1.1.1
 
 ## Highlights
 
-- Adds `L6BL`, `DS5000`, `E740`, `W28`, `CS7505`, `U820`, `X-6800`,
-  `RD-I8`, `CS8515`, and `RW-185` to the scanner model catalog.
-- Maps the new models to the confirmed `NTC06H`, `NT212X`, `NT280H`, or
-  `SE4750` module-family template from the V4.1 standard BOM.
-- Exposes the new models through the existing Android Kotlin and Apple Swift
-  model, capability-entry, and setting-code-entry APIs.
+- Android discovery starts without a system service UUID filter; scanner names receive priority in Demo device lists.
+- Android adds Nordic UART GATT support and MTU negotiation before notification setup, with a timeout fallback.
+- Fixes the Android Demo model dropdown being obscured by system navigation.
+- Core recognizes RW185 version responses during version queries and includes long-scan reassembly coverage.
+- Includes shared Core fixes for CS7501 response parsing and HID payload lengths.
 
 ## Compatibility
 
-- Product version: `1.1.0`.
-- Native C ABI remains `1.0.0` (`0x010000`); frozen symbols and structure
-  layouts are unchanged.
-- Android Kotlin and Apple Swift public API baselines are unchanged, so no
-  source migration is required from `1.0.0`.
-- Use the wrapper, C headers, and native binary from the same `1.1.0` package.
+Product version is `1.1.1`. Native C ABI remains `1.0.0` (`0x010000`). Android Kotlin and Apple Swift public APIs are unchanged. Use wrappers and native binaries from the same product version. Nordic UART and MTU changes in this release apply to Android; no equivalent Apple adapter change is claimed. Model support statuses remain unchanged.
 
-## Model Status
+## RW-185 observations
 
-All ten added models are `CodeOnly`. Model resolution, template mapping,
-transport enumeration, and capability/setting-code catalog access are covered
-by automated tests. This status does not claim device verification.
+For the tested RW185_CBTDE52h_G319 firmware over Android BLE, keep each scan within 1024 bytes including the final 0x0D (at most 1023 payload bytes). Payloads of 500 and 1000 bytes passed exact comparison; 1024, 1200 and 1500 byte payloads showed missing or corrupted data. The 1023 byte boundary remains unverified. This is usage guidance for the tested device, not a new SDK buffer limit or a guarantee for other models.
+
+An unset MasterReplaceRule returns `nul` normally. The tested Demo still reports no usable setting value for this state. Unsolicited `+HIDDLY=2` text can still enter the scan stream when no matching query is pending.
 
 ## Known Device Limitation
 
