@@ -3,17 +3,18 @@ import CNSDK
 
 final class StreamHub<Element>: @unchecked Sendable {
     private let lock = NSLock()
-    private let capacity: Int
+    private let capacity: Int?
     private var onDrop: (() -> Void)?
     private var continuations: [UUID: AsyncStream<Element>.Continuation] = [:]
     private var finished = false
 
-    init(capacity: Int = 64) {
-        self.capacity = max(1, capacity)
+    init(capacity: Int? = 64) {
+        self.capacity = capacity.map { max(1, $0) }
     }
 
     func makeStream() -> AsyncStream<Element> {
-        AsyncStream(bufferingPolicy: .bufferingNewest(capacity)) { continuation in
+        let policy: AsyncStream<Element>.Continuation.BufferingPolicy = capacity.map { .bufferingNewest($0) } ?? .unbounded
+        return AsyncStream(bufferingPolicy: policy) { continuation in
             let id = UUID()
             lock.lock()
             let shouldFinish = finished

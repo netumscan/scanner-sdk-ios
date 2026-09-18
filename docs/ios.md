@@ -2,13 +2,13 @@
 
 ## Installation
 
-Add the public SwiftPM package from version `1.1.1`:
+Add the public SwiftPM package from version `2.0.0`:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/netumscan/scanner-sdk-ios.git",
-        from: "1.1.1"
+        from: "2.0.0"
     )
 ]
 ```
@@ -67,7 +67,7 @@ The host application must provide a Bluetooth usage description:
 1. Read `ScannerSDK.shared.version` for diagnostics.
 2. Initialize the SDK.
 3. Observe discovery and failure streams.
-4. Start BLE discovery with the selected scanner model.
+4. Start unfiltered BLE discovery; choose candidates in the app. The selected model is used for connection.
 5. Connect and wait for the session to become Ready.
 6. Observe `scanEvents` and session failures.
 7. Serialize configuration commands.

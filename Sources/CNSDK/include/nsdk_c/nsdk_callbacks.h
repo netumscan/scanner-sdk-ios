@@ -16,6 +16,18 @@ typedef void (NSDK_C_CALL *nsdk_discovered_device_callback_t)(
     void* user_data
 );
 
+typedef void (NSDK_C_CALL *nsdk_discovered_device_v2_callback_t)(
+    const nsdk_discovered_device_v2_t* device,
+    void* user_data
+);
+
+typedef struct nsdk_discovery_callbacks_v2_t {
+    uint32_t struct_size;
+    nsdk_discovered_device_v2_callback_t discovered_device_callback;
+    void* user_data;
+    uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
+} nsdk_discovery_callbacks_v2_t;
+
 typedef void (NSDK_C_CALL *nsdk_session_state_callback_t)(
     nsdk_session_handle_t session,
     nsdk_session_state_t state,

@@ -3,6 +3,64 @@ import CNSDK
 @testable import ScannerSDK
 
 final class ScannerSDKTests: XCTestCase {
+    func testDiscoveryBurstPreservesEveryDeviceForSlowConsumer() async {
+        // Exercise the same unbounded hub policy as discovery without native hardware.
+        let hub = StreamHub<Int>(capacity: nil)
+        let buffered = hub.makeStream()
+        for value in 0..<180 { hub.yield(value) }
+        hub.finish()
+        var values: [Int] = []
+        for await value in buffered { values.append(value) }
+        XCTAssertEqual(values, Array(0..<180))
+    }
+
+    func testDiscoveryV2CopiesBorrowedAdvertisementBytes() {
+        var payload: [UInt8] = [0x00, 0xff, 0x80]
+        let copied: DiscoveredDevice = "Scanner local".withCString { name in
+            "0000180f-0000-1000-8000-00805f9b34fb".withCString { uuid in
+                payload.withUnsafeBufferPointer { bytes in
+                    var manufacturer = nsdk_ble_manufacturer_data_t()
+                    manufacturer.company_id = 0x1234
+                    manufacturer.data = bytes.baseAddress
+                    manufacturer.size = UInt32(bytes.count)
+                    var service = nsdk_ble_service_data_t()
+                    service.service_uuid = uuid
+                    service.data = bytes.baseAddress
+                    service.size = UInt32(bytes.count)
+                    var uuidPointer: UnsafePointer<CChar>? = uuid
+                    return withUnsafePointer(to: &manufacturer) { manufacturerPointer in
+                        withUnsafePointer(to: &service) { servicePointer in
+                            withUnsafePointer(to: &uuidPointer) { uuidArray in
+                                var value = nsdk_discovered_device_v2_t()
+                                value.struct_size = UInt32(MemoryLayout<nsdk_discovered_device_v2_t>.size)
+                                copyCString("anonymous", into: &value.base.device_id)
+                                value.base.transport = Int32(NSDK_TRANSPORT_BLE_GATT)
+                                value.advertisement_name = name
+                                value.service_uuids = uuidArray
+                                value.service_uuid_count = 1
+                                value.manufacturer_data = manufacturerPointer
+                                value.manufacturer_data_count = 1
+                                value.service_data = servicePointer
+                                value.service_data_count = 1
+                                value.connectable = -1
+                                return DiscoveredDevice(cValue: value)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        payload[0] = 42
+        XCTAssertEqual(copied.name, "")
+        XCTAssertEqual(copied.deviceId, "anonymous")
+        XCTAssertEqual(copied.advertisementName, "Scanner local")
+        XCTAssertEqual(copied.serviceUuids, ["0000180f-0000-1000-8000-00805f9b34fb"])
+        XCTAssertEqual(copied.manufacturerData[0x1234], Data([0, 255, 128]))
+        XCTAssertEqual(copied.serviceData[copied.serviceUuids[0]], Data([0, 255, 128]))
+        XCTAssertNil(copied.connectable)
+        XCTAssertNil(copied.rssi)
+    }
+
     func testScannerErrorPreservesNativeErrorCode() {
         XCTAssertNoThrow(try nsdkCheck(0, operation: "nativeSuccess"))
 

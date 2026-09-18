@@ -364,6 +364,35 @@ typedef struct nsdk_discovered_device_t {
     uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
 } nsdk_discovered_device_t;
 
+// Borrowed views: all pointers (including nested payloads) are valid only during
+// the discovery callback. Copy before returning or dispatching asynchronously.
+typedef struct nsdk_ble_manufacturer_data_t {
+    uint32_t company_id; // Bluetooth company ID, not a USB VID; payload excludes ID.
+    const uint8_t* data;
+    uint32_t size;
+} nsdk_ble_manufacturer_data_t;
+
+typedef struct nsdk_ble_service_data_t {
+    const char* service_uuid; // Complete, lowercase UUID, NUL terminated.
+    const uint8_t* data;
+    uint32_t size;
+} nsdk_ble_service_data_t;
+
+typedef struct nsdk_discovered_device_v2_t {
+    uint32_t struct_size;
+    nsdk_discovered_device_t base;
+    const char* advertisement_name; // NUL terminated; empty when not observed.
+    const char* const* service_uuids;
+    uint32_t service_uuid_count;
+    const nsdk_ble_manufacturer_data_t* manufacturer_data;
+    uint32_t manufacturer_data_count;
+    const nsdk_ble_service_data_t* service_data;
+    uint32_t service_data_count;
+    int32_t connectable; // -1 unknown, 0 no, 1 yes.
+    uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
+} nsdk_discovered_device_v2_t;
+
+
 typedef struct nsdk_battery_info_t {
     uint32_t struct_size;
     char raw_text[64];

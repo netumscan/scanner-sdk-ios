@@ -7,7 +7,7 @@ public final class ScannerSDK: @unchecked Sendable {
 
     private let lock = NSLock()
     private let abiLock = NSLock()
-    private var discoveryHub = StreamHub<DiscoveredDevice>()
+    private var discoveryHub = StreamHub<DiscoveredDevice>(capacity: nil)
     private var discoveryFailureHub = StreamHub<DiscoveryFailure>()
     private var sessionFailureHub = StreamHub<SessionFailure>()
     private var commandTraceHub = StreamHub<CommandTrace>()
@@ -268,7 +268,7 @@ public final class ScannerSDK: @unchecked Sendable {
         let oldSessionFailureHub = sessionFailureHub
         let oldCommandTraceHub = commandTraceHub
         let oldDebugHub = debugHub
-        discoveryHub = StreamHub<DiscoveredDevice>()
+        discoveryHub = StreamHub<DiscoveredDevice>(capacity: nil)
         discoveryFailureHub = StreamHub<DiscoveryFailure>()
         sessionFailureHub = StreamHub<SessionFailure>()
         commandTraceHub = StreamHub<CommandTrace>()
@@ -280,6 +280,7 @@ public final class ScannerSDK: @unchecked Sendable {
         }
 
         _ = nsdk_set_callbacks(nil)
+        _ = nsdk_set_discovery_callbacks_v2(nil)
 
         let shutdownCode = nsdk_shutdown()
         AppleBleRuntime.stop()
@@ -720,8 +721,6 @@ public final class ScannerSDK: @unchecked Sendable {
         var callbacks = makeNsdkCallbacks()
         callbacks.discovery_failure_callback = nsdk_swift_discovery_failure_callback
         callbacks.discovery_failure_user_data = userData
-        callbacks.discovered_device_callback = nsdk_swift_discovered_device_callback
-        callbacks.discovered_device_user_data = userData
         callbacks.session_state_callback = nsdk_swift_state_callback
         callbacks.session_state_user_data = userData
         callbacks.scan_data_callback = nsdk_swift_scan_callback
@@ -735,52 +734,25 @@ public final class ScannerSDK: @unchecked Sendable {
         callbacks.log_callback = nsdk_swift_log_callback
         callbacks.log_user_data = userData
         try nsdkCheck(nsdk_set_callbacks(&callbacks), operation: "installCallbacks")
+        var discoveryCallbacks = nsdk_discovery_callbacks_v2_t()
+        discoveryCallbacks.struct_size = UInt32(MemoryLayout<nsdk_discovery_callbacks_v2_t>.size)
+        discoveryCallbacks.discovered_device_callback = nsdk_swift_discovered_device_callback
+        discoveryCallbacks.user_data = userData
+        try nsdkCheck(nsdk_set_discovery_callbacks_v2(&discoveryCallbacks), operation: "installDiscoveryCallbacksV2")
         callbacksInstalled = true
     }
 
-    fileprivate func handleDiscovery(deviceID: String, name: String, transport: TransportType) {
-        handleDiscovery(deviceID: deviceID, name: name, transport: transport, modelKey: "", matchReason: nil)
-    }
-
-    fileprivate func handleDiscovery(
-        deviceID: String,
-        name: String,
-        transport: TransportType,
-        modelKey: String,
-        matchReason: String?,
-        rssi: Int? = nil
-    ) {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if transport == .bleGatt && normalizedName.isEmpty {
-            emitDebug("Drop unnamed BLE discovery deviceId=\(deviceID) model=\(modelKey) reason=\(matchReason ?? "unknown")")
-            return
-        }
-        let device = DiscoveredDevice(
-            deviceId: deviceID,
-            name: normalizedName,
-            transportType: transport,
-            modelKey: modelKey,
-            matchReason: matchReason,
-            rssi: rssi
-        )
-        let shouldYield: Bool
+    fileprivate func handleDiscovery(_ device: DiscoveredDevice) {
+        if device.transportType == .bleGatt && device.deviceId.isEmpty { return }
         lock.lock()
-        if let existing = discoveredDevices[deviceID] {
-            let nameImproved = existing.name.isEmpty && !device.name.isEmpty
-            let nameChanged = !device.name.isEmpty && existing.name != device.name
-            let modelChanged = existing.modelKey != device.modelKey
-            let matchReasonChanged = existing.matchReason != device.matchReason
-            shouldYield = nameImproved || nameChanged || modelChanged || matchReasonChanged
-        } else {
-            shouldYield = true
-        }
-        if shouldYield {
-            discoveredDevices[deviceID] = device
-        }
+        // BLE changes and duplicates are handled by the shared Core cache.
+        let existing = discoveredDevices[device.deviceId]
+        let shouldYield = device.transportType == .bleGatt || existing == nil ||
+            existing?.name != device.name || existing?.modelKey != device.modelKey ||
+            existing?.matchReason != device.matchReason
+        if shouldYield { discoveredDevices[device.deviceId] = device }
         lock.unlock()
-        if shouldYield {
-            discoveryHub.yield(device)
-        }
+        if shouldYield { discoveryHub.yield(device) }
     }
 
     fileprivate func handleState(handle: UInt64, state: SessionState) {
@@ -1212,21 +1184,13 @@ private func nsdk_swift_discovery_failure_callback(
 }
 
 private func nsdk_swift_discovered_device_callback(
-    device: UnsafePointer<nsdk_discovered_device_t>?,
+    device: UnsafePointer<nsdk_discovered_device_v2_t>?,
     userData: UnsafeMutableRawPointer?
 ) {
-    guard let userData, let device else { return }
+    guard let userData, let device,
+          device.pointee.struct_size >= MemoryLayout<nsdk_discovered_device_v2_t>.size else { return }
     let sdk = Unmanaged<ScannerSDK>.fromOpaque(userData).takeUnretainedValue()
-    let value = device.pointee
-    let matchReason = stringFromCStringBuffer(value.match_reason)
-    sdk.handleDiscovery(
-        deviceID: stringFromCStringBuffer(value.device_id),
-        name: stringFromCStringBuffer(value.name),
-        transport: TransportType(rawValue: value.transport) ?? .bleGatt,
-        modelKey: stringFromCStringBuffer(value.model_key),
-        matchReason: matchReason.isEmpty ? nil : matchReason,
-        rssi: value.rssi_available != 0 ? Int(value.rssi) : nil
-    )
+    sdk.handleDiscovery(DiscoveredDevice(cValue: device.pointee))
 }
 
 private func nsdk_swift_state_callback(

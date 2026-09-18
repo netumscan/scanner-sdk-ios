@@ -228,6 +228,8 @@ NSDK_C_API nsdk_error_t nsdk_build_setting_code(
     nsdk_setting_code_result_t* out_result
 );
 NSDK_C_API nsdk_error_t nsdk_set_callbacks(const nsdk_callbacks_t* callbacks);
+// Independent of v1 callbacks; NULL unregisters and waits for in-flight calls.
+NSDK_C_API nsdk_error_t nsdk_set_discovery_callbacks_v2(const nsdk_discovery_callbacks_v2_t* callbacks);
 
 #ifdef __cplusplus
 }

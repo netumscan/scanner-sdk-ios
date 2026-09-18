@@ -8,6 +8,11 @@ public struct DiscoveredDevice: Sendable {
     public let modelKey: String
     public let matchReason: String?
     public let rssi: Int?
+    public let advertisementName: String
+    public let serviceUuids: [String]
+    public let manufacturerData: [UInt16: Data]
+    public let serviceData: [String: Data]
+    public let connectable: Bool?
 
     public init(
         deviceId: String,
@@ -15,7 +20,12 @@ public struct DiscoveredDevice: Sendable {
         transportType: TransportType,
         modelKey: String = "",
         matchReason: String? = nil,
-        rssi: Int? = nil
+        rssi: Int? = nil,
+        advertisementName: String = "",
+        serviceUuids: [String] = [],
+        manufacturerData: [UInt16: Data] = [:],
+        serviceData: [String: Data] = [:],
+        connectable: Bool? = nil
     ) {
         self.deviceId = deviceId
         self.name = name
@@ -23,6 +33,55 @@ public struct DiscoveredDevice: Sendable {
         self.modelKey = modelKey
         self.matchReason = matchReason
         self.rssi = rssi
+        self.advertisementName = advertisementName
+        self.serviceUuids = serviceUuids
+        self.manufacturerData = manufacturerData
+        self.serviceData = serviceData
+        self.connectable = connectable
+    }
+
+    // Copy all borrowed C views synchronously, before yielding to AsyncStream.
+    internal init(cValue value: nsdk_discovered_device_v2_t) {
+        let base = value.base
+        var uuids: [String] = []
+        if let entries = value.service_uuids {
+            for index in 0..<Int(value.service_uuid_count) {
+                if let text = entries[index] { uuids.append(String(cString: text)) }
+            }
+        }
+        var manufacturers: [UInt16: Data] = [:]
+        if let entries = value.manufacturer_data {
+            for index in 0..<Int(value.manufacturer_data_count) {
+                let entry = entries[index]
+                guard let companyID = UInt16(exactly: entry.company_id) else { continue }
+                manufacturers[companyID] = entry.data.map { Data(bytes: $0, count: Int(entry.size)) } ?? Data()
+            }
+        }
+        var services: [String: Data] = [:]
+        if let entries = value.service_data {
+            for index in 0..<Int(value.service_data_count) {
+                let entry = entries[index]
+                if let uuid = entry.service_uuid {
+                    services[String(cString: uuid)] = entry.data.map { Data(bytes: $0, count: Int(entry.size)) } ?? Data()
+                }
+            }
+        }
+        let reason = stringFromCStringBuffer(base.match_reason)
+        let transport = TransportType(rawValue: base.transport) ?? .bleGatt
+        let name = stringFromCStringBuffer(base.name)
+        self.init(
+            deviceId: stringFromCStringBuffer(base.device_id),
+            name: transport == .bleGatt ? name : name.trimmingCharacters(in: .whitespacesAndNewlines),
+            transportType: transport,
+            modelKey: stringFromCStringBuffer(base.model_key),
+            matchReason: reason.isEmpty ? nil : reason,
+            rssi: base.rssi_available != 0 ? Int(base.rssi) : nil,
+            advertisementName: value.advertisement_name.map { String(cString: $0) } ?? "",
+            serviceUuids: uuids,
+            manufacturerData: manufacturers,
+            serviceData: services,
+            connectable: value.connectable == 0 ? false : (value.connectable == 1 ? true : nil)
+        )
     }
 }
 
