@@ -18,6 +18,15 @@ NSDK_C_API const char* nsdk_error_message(nsdk_error_t code);
 NSDK_C_API nsdk_error_t nsdk_discovery_start(const nsdk_discovery_request_t* request);
 NSDK_C_API nsdk_error_t nsdk_discovery_stop(void);
 
+/* Pass the report ID from the usable HID interface, or -1 if unavailable.
+ * For USB Serial the report ID is ignored. Unmatched fingerprints return UNKNOWN. */
+NSDK_C_API nsdk_device_kind_t nsdk_classify_usb_device(
+    nsdk_transport_type_t transport,
+    uint16_t vendor_id,
+    uint16_t product_id,
+    int32_t hid_report_id
+);
+
 NSDK_C_API nsdk_error_t nsdk_session_connect(
     const nsdk_connect_request_t* request,
     nsdk_session_handle_t* out_session
@@ -108,6 +117,11 @@ NSDK_C_API nsdk_error_t nsdk_session_execute_capability_action(
     const nsdk_capability_action_request_t* request,
     nsdk_command_response_t* out_response
 );
+NSDK_C_API nsdk_error_t nsdk_session_execute_nt212x_command(
+    nsdk_session_handle_t session,
+    const nsdk_nt212x_command_request_t* request,
+    nsdk_command_response_t* out_response
+);
 NSDK_C_API nsdk_error_t nsdk_data_rule_kind_get_label(
     nsdk_data_rule_kind_t kind,
     nsdk_data_rule_kind_label_t* out_label
@@ -116,6 +130,10 @@ NSDK_C_API nsdk_error_t nsdk_session_set_scan_text_terminator(
     nsdk_session_handle_t session,
     const uint8_t* terminator_bytes,
     uint32_t terminator_size
+);
+NSDK_C_API nsdk_error_t nsdk_session_set_scan_wire_format(
+    nsdk_session_handle_t session,
+    const nsdk_scan_wire_config_t* config
 );
 NSDK_C_API nsdk_error_t nsdk_command_response_copy_full_text_bytes(
     const nsdk_command_response_t* response,
@@ -228,8 +246,12 @@ NSDK_C_API nsdk_error_t nsdk_build_setting_code(
     nsdk_setting_code_result_t* out_result
 );
 NSDK_C_API nsdk_error_t nsdk_set_callbacks(const nsdk_callbacks_t* callbacks);
-// Independent of v1 callbacks; NULL unregisters and waits for in-flight calls.
+// Independent of v1 callbacks; NULL unregisters. A callback returns BUSY if
+// unregistering would wait for callbacks on other threads; retry after return.
 NSDK_C_API nsdk_error_t nsdk_set_discovery_callbacks_v2(const nsdk_discovery_callbacks_v2_t* callbacks);
+// Independent of v1 callbacks. NULL unregisters unless a live packet-mode
+// session still requires a v2 scan consumer; then returns BUSY.
+NSDK_C_API nsdk_error_t nsdk_set_scan_callbacks_v2(const nsdk_scan_callbacks_v2_t* callbacks);
 
 #ifdef __cplusplus
 }

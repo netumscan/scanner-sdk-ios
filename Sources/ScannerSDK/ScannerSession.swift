@@ -245,18 +245,7 @@ public final class ScannerSession: @unchecked Sendable {
                 operation: "readCapabilityValue"
             )
         }
-        guard result.value_available != 0 else {
-            throw ScannerError(code: 11, operation: "readCapabilityValue")
-        }
-        var mutableResult = result
-        defer { nsdk_capability_value_result_dispose(&mutableResult) }
-        let valueBytes = try copyBytes(
-            copy: { buffer, capacity, outLength in
-                nsdk_capability_value_result_copy_full_value_bytes(&mutableResult, buffer, capacity, outLength)
-            },
-            operation: "readCapabilityValue.copyValueBytes"
-        )
-        return try decodeCapabilityValue(entry, bytes: valueBytes)
+        return try consumeCapabilityReadResult(&result, valueKind: entry.valueKind)
     }
 
     public func writeCapabilityValue(
@@ -503,7 +492,8 @@ public final class ScannerSession: @unchecked Sendable {
 
     internal func onStateChanged(_ state: SessionState) {
         lock.lock()
-        if terminatedBySdkShutdown {
+        if terminatedBySdkShutdown ||
+            ((currentState == .disconnected || currentState == .error) && state != .disconnected && state != .error) {
             lock.unlock()
             return
         }
@@ -590,21 +580,6 @@ public final class ScannerSession: @unchecked Sendable {
         return entry
     }
 
-    private func decodeCapabilityValue(_ entry: CapabilityEntry, bytes: Data) throws -> CapabilityValue {
-        switch entry.valueKind {
-        case .boolean:
-            guard bytes.count == 1 else {
-                throw ScannerError(code: -1, operation: "readCapabilityValue expected single-byte boolean response")
-            }
-            return .boolean(bytes.first != 0x00)
-        case .bytesAscii:
-            let text = String(data: bytes, encoding: .ascii) ?? String(decoding: bytes, as: UTF8.self)
-            return CapabilityValue(kind: .bytesAscii, bytes: bytes, textValue: text)
-        default:
-            return .bytes(entry.valueKind, bytes)
-        }
-    }
-
     private func encodeCapabilityValue(_ entry: CapabilityEntry, value: CapabilityValue) throws -> Data {
         if entry.valueKind == .boolean {
             if let booleanValue = value.booleanValue {
@@ -687,6 +662,34 @@ public final class ScannerSession: @unchecked Sendable {
             recordBytes: collector.records,
             recordsComplete: mutableResponse.records_complete != 0
         )
+    }
+}
+
+func consumeCapabilityReadResult(
+    _ result: inout nsdk_capability_value_result_t,
+    valueKind: CapabilityValueKind
+) throws -> CapabilityValue {
+    defer { nsdk_capability_value_result_dispose(&result) }
+    guard result.value_available != 0 else {
+        throw ScannerError(code: 11, operation: "readCapabilityValue")
+    }
+    let bytes = try copyBytes(
+        copy: { buffer, capacity, outLength in
+            nsdk_capability_value_result_copy_full_value_bytes(&result, buffer, capacity, outLength)
+        },
+        operation: "readCapabilityValue.copyValueBytes"
+    )
+    switch valueKind {
+    case .boolean:
+        guard bytes.count == 1 else {
+            throw ScannerError(code: -1, operation: "readCapabilityValue expected single-byte boolean response")
+        }
+        return .boolean(bytes.first != 0x00)
+    case .bytesAscii:
+        let text = String(data: bytes, encoding: .ascii) ?? String(decoding: bytes, as: UTF8.self)
+        return CapabilityValue(kind: .bytesAscii, bytes: bytes, textValue: text)
+    default:
+        return .bytes(valueKind, bytes)
     }
 }
 

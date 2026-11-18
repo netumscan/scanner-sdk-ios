@@ -1,9 +1,9 @@
 name=ScannerSDK
-version=2.0.1
-sdkCommit=463b19c98a69ad1fdc269f7382830b57134acec6
+version=2.2.0
+sdkCommit=651d19a5ddb52110b680552df349fe7652928cd9
 workflowRunId=local
 zip_file=ScannerSDK.xcframework.zip
-checksum=85e86ed743ad55dc2b6943be8a06e9aafa614593e91d68d04d66f53ec92ce8e7
-sha256=85e86ed743ad55dc2b6943be8a06e9aafa614593e91d68d04d66f53ec92ce8e7
+checksum=f0a2a41ade5bf593f3034b6e8b51578c677d3e239569d0e0c1814b7b95515c7b
+sha256=f0a2a41ade5bf593f3034b6e8b51578c677d3e239569d0e0c1814b7b95515c7b
 swiftPmUrl=https://github.com/netumscan/scanner-sdk-ios
-binaryUrl=https://github.com/netumscan/scanner-sdk-ios/releases/download/v2.0.1/ScannerSDK.xcframework.zip
+binaryUrl=https://github.com/netumscan/scanner-sdk-ios/releases/download/v2.2.0/ScannerSDK.xcframework.zip

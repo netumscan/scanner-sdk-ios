@@ -77,6 +77,25 @@ enum {
     NSDK_DATA_RULE_REPLACE = 7
 };
 
+/* NT212X SSI instructions accepted by nsdk_session_execute_nt212x_command. */
+typedef int32_t nsdk_nt212x_command_kind_t;
+enum {
+    NSDK_NT212X_COMMAND_READ_VERSION = 1,
+    NSDK_NT212X_COMMAND_START_DECODE = 2,
+    NSDK_NT212X_COMMAND_STOP_DECODE = 3,
+    NSDK_NT212X_COMMAND_READ_PARAMETER = 4,
+    NSDK_NT212X_COMMAND_WRITE_PARAMETER = 5,
+    NSDK_NT212X_COMMAND_FACTORY_DEFAULTS = 6,
+    NSDK_NT212X_COMMAND_SCAN_ENABLE = 7,
+    NSDK_NT212X_COMMAND_SCAN_DISABLE = 8,
+    NSDK_NT212X_COMMAND_SLEEP = 9,
+    NSDK_NT212X_COMMAND_RESET = 10,
+    NSDK_NT212X_COMMAND_LED_ON = 11,
+    NSDK_NT212X_COMMAND_LED_OFF = 12,
+    NSDK_NT212X_COMMAND_ACK = 13,
+    NSDK_NT212X_COMMAND_NAK = 14
+};
+
 typedef int32_t nsdk_device_support_status_t;
 enum {
     NSDK_DEVICE_SUPPORT_UNKNOWN = 0,
@@ -164,6 +183,14 @@ enum {
     NSDK_TRANSPORT_USB_HID = 1,
     NSDK_TRANSPORT_USB_SERIAL = 2,
     NSDK_TRANSPORT_SPP_CLASSIC = 3
+};
+
+typedef int32_t nsdk_device_kind_t;
+enum {
+    NSDK_DEVICE_KIND_UNKNOWN = 0,
+    NSDK_DEVICE_KIND_WIRELESS_SCANNER = 1,
+    NSDK_DEVICE_KIND_WIRED_SCANNER = 2,
+    NSDK_DEVICE_KIND_SCAN_MODULE = 3
 };
 
 typedef int32_t nsdk_capability_risk_level_t;
@@ -432,6 +459,21 @@ typedef struct nsdk_command_response_t {
     uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
 } nsdk_command_response_t;
 
+/* For C7/FD, parameter_bytes contains one or more encoded addresses (FE first for ALL_PARAMS).
+ * For C6/FC, parameter_bytes contains the encoded parameter address and payload_bytes its value.
+ * ACK/NAK are send-only: a successful call has no response bytes and acknowledged remains zero.
+ * Permanent parameter writes require persist=1 explicitly. All other commands require persist=0. */
+typedef struct nsdk_nt212x_command_request_t {
+    uint32_t struct_size;
+    nsdk_nt212x_command_kind_t kind;
+    const uint8_t* parameter_bytes;
+    uint32_t parameter_size;
+    const uint8_t* payload_bytes;
+    uint32_t payload_size;
+    int32_t persist;
+    uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
+} nsdk_nt212x_command_request_t;
+
 typedef struct nsdk_capability_value_result_t {
     uint32_t struct_size;
     nsdk_capability_value_kind_t value_kind;
@@ -596,6 +638,100 @@ typedef struct nsdk_scan_data_t {
     uint32_t raw_size;
     uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
 } nsdk_scan_data_t;
+
+typedef int32_t nsdk_barcode_type_t;
+enum {
+    NSDK_BARCODE_UNKNOWN = 0,
+    NSDK_BARCODE_CODE128 = 1,
+    NSDK_BARCODE_CODE39 = 2,
+    NSDK_BARCODE_QR = 3,
+    NSDK_BARCODE_DATA_MATRIX = 4,
+    NSDK_BARCODE_EAN13 = 5,
+    NSDK_BARCODE_UPCA = 6,
+    NSDK_BARCODE_UPCE0 = 7,
+    NSDK_BARCODE_EAN8 = 8,
+    NSDK_BARCODE_GS1_128 = 9,
+    NSDK_BARCODE_PDF417 = 10,
+    NSDK_BARCODE_CODE93 = 11,
+    NSDK_BARCODE_INTERLEAVED_2_OF_5 = 12,
+    NSDK_BARCODE_CODABAR = 13,
+    NSDK_BARCODE_DISCRETE_2_OF_5 = 14,
+    NSDK_BARCODE_IATA_2_OF_5 = 15,
+    NSDK_BARCODE_CODE11 = 16,
+    NSDK_BARCODE_MSI = 17,
+    NSDK_BARCODE_UPCE1 = 18,
+    NSDK_BARCODE_TRIOPTIC_CODE39 = 19,
+    NSDK_BARCODE_BOOKLAND_EAN = 20,
+    NSDK_BARCODE_COUPON_CODE = 21,
+    NSDK_BARCODE_GS1_DATABAR_14 = 22,
+    NSDK_BARCODE_GS1_DATABAR_LIMITED = 23,
+    NSDK_BARCODE_GS1_DATABAR_EXPANDED = 24,
+    NSDK_BARCODE_UPCA_WITH_2_SUPPLEMENT = 25,
+    NSDK_BARCODE_UPCE0_WITH_2_SUPPLEMENT = 26,
+    NSDK_BARCODE_EAN8_WITH_2_SUPPLEMENT = 27,
+    NSDK_BARCODE_EAN13_WITH_2_SUPPLEMENT = 28,
+    NSDK_BARCODE_UPCE1_WITH_2_SUPPLEMENT = 29,
+    NSDK_BARCODE_UPCA_WITH_5_SUPPLEMENT = 30,
+    NSDK_BARCODE_UPCE0_WITH_5_SUPPLEMENT = 31,
+    NSDK_BARCODE_EAN8_WITH_5_SUPPLEMENT = 32,
+    NSDK_BARCODE_EAN13_WITH_5_SUPPLEMENT = 33,
+    NSDK_BARCODE_UPCE1_WITH_5_SUPPLEMENT = 34,
+    NSDK_BARCODE_AIM128 = 35,
+    NSDK_BARCODE_ISSN = 36,
+    NSDK_BARCODE_PLESSEY = 37,
+    NSDK_BARCODE_AZTEC = 38,
+    NSDK_BARCODE_MAXI_CODE = 39,
+    NSDK_BARCODE_VERI_CODE = 40,
+    NSDK_BARCODE_HAN_XIN = 41
+};
+
+typedef int32_t nsdk_scan_source_identifier_kind_t;
+enum {
+    NSDK_SCAN_SOURCE_IDENTIFIER_NONE = 0,
+    NSDK_SCAN_SOURCE_IDENTIFIER_SSI_F3 = 1,
+    NSDK_SCAN_SOURCE_IDENTIFIER_SSI_F4 = 2,
+    NSDK_SCAN_SOURCE_IDENTIFIER_AIM_ID = 3
+};
+
+typedef int32_t nsdk_scan_wire_format_t;
+enum {
+    NSDK_SCAN_WIRE_RAW_TEXT = 0,
+    NSDK_SCAN_WIRE_SSI_PACKET = 1
+};
+
+typedef uint32_t nsdk_scan_data_v2_flags_t;
+enum {
+    NSDK_SCAN_DATA_V2_INPUT_VALID = 1u << 0,
+    NSDK_SCAN_DATA_V2_LABEL_VALID = 1u << 1,
+    NSDK_SCAN_DATA_V2_TYPE_VALID = 1u << 2,
+    NSDK_SCAN_DATA_V2_SOURCE_IDENTIFIER_VALID = 1u << 3
+};
+
+/* Pointers are borrowed for the duration of the callback. Copy bytes to retain them. */
+typedef struct nsdk_scan_data_v2_t {
+    uint32_t struct_size;
+    nsdk_scan_data_v2_flags_t flags;
+    uint64_t timestamp_ms;
+    uint64_t event_sequence;
+    nsdk_barcode_type_t barcode_type;
+    nsdk_scan_source_identifier_kind_t source_identifier_kind;
+    const uint8_t* input_bytes;
+    uint32_t input_size;
+    const uint8_t* label_bytes;
+    uint32_t label_size;
+    const uint8_t* source_identifier_bytes;
+    uint32_t source_identifier_size;
+    uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
+} nsdk_scan_data_v2_t;
+
+/* Host-side receive mode only; this request does not change device settings. */
+typedef struct nsdk_scan_wire_config_t {
+    uint32_t struct_size;
+    nsdk_scan_wire_format_t format;
+    int32_t software_handshake_enabled;
+    int32_t strip_configured_terminator_for_label;
+    uint32_t reserved[NSDK_STRUCT_RESERVED_FIELD_COUNT];
+} nsdk_scan_wire_config_t;
 
 typedef struct nsdk_session_failure_t {
     uint32_t struct_size;

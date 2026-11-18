@@ -3,6 +3,175 @@ import CNSDK
 @testable import ScannerSDK
 
 final class ScannerSDKTests: XCTestCase {
+    func testReadyArrivingDuringPendingReplayCannotBeOverwritten() async {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 701)
+        var states = session.state.makeAsyncIterator()
+        sdk.simulatePendingState(.connecting, handle: 701)
+        sdk.simulatePendingState(.connected, handle: 701)
+        replayWhileBlocked(sdk: sdk, session: session) { sdk.simulatePendingState(.ready, handle: 701) }
+        XCTAssertEqual(session.latestState, .ready)
+        XCTAssertTrue(sdk.findSession(handle: 701) === session)
+        var received: [SessionState] = []
+        for _ in 0..<3 {
+            if let state = await states.next() { received.append(state) }
+        }
+        XCTAssertEqual(received, [.connecting, .connected, .ready])
+    }
+
+    func testTerminalArrivingDuringPendingReplayCannotBeResurrected() {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 702)
+        sdk.simulatePendingState(.connecting, handle: 702)
+        sdk.simulatePendingState(.connected, handle: 702)
+        replayWhileBlocked(sdk: sdk, session: session) {
+            sdk.simulatePendingState(.disconnected, handle: 702)
+            sdk.simulatePendingState(.ready, handle: 702)
+        }
+        XCTAssertEqual(session.latestState, .disconnected)
+        XCTAssertNil(sdk.findSession(handle: 702))
+        XCTAssertEqual(sdk.pendingSessionEventCountForTesting(handle: 702), 0)
+    }
+
+    func testPendingAndConcurrentLiveScansPreserveOrderWhileAnotherSessionProgresses() async {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 703)
+        var scans = session.scanEvents.makeAsyncIterator()
+        func scan(_ text: String) {
+            sdk.simulatePendingScan(handle: 703, timestampMs: 1, barcodeType: 0, textBytes: Data(text.utf8), rawBytes: Data())
+        }
+        scan("pending")
+        replayWhileBlocked(sdk: sdk, session: session) {
+            let producers = DispatchGroup()
+            for producer in 0..<4 {
+                producers.enter()
+                DispatchQueue.global().async {
+                    for index in 0..<8 { scan("\(producer):\(index)") }
+                    producers.leave()
+                }
+            }
+            XCTAssertEqual(producers.wait(timeout: .now() + 5), .success)
+            let independent = sdk.registerSessionForTesting(handle: 704)
+            sdk.simulatePendingState(.ready, handle: 704)
+            XCTAssertEqual(independent.latestState, .ready)
+        }
+        var values: [String] = []
+        for _ in 0..<33 {
+            if let scan = await scans.next() { values.append(scan.text) }
+        }
+        XCTAssertEqual(values.first, "pending")
+        for producer in 0..<4 {
+            XCTAssertEqual(values.filter { $0.hasPrefix("\(producer):") }, (0..<8).map { "\(producer):\($0)" })
+        }
+        XCTAssertEqual(sdk.pendingSessionEventCountForTesting(handle: 703), 0)
+    }
+
+    func testTerminalPendingEventSurvivesLateEventFloodAndClearsResources() {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 705)
+        sdk.simulatePendingState(.error, handle: 705)
+        for index in 0..<64 {
+            sdk.simulatePendingScan(handle: 705, timestampMs: UInt64(index), barcodeType: 0, textBytes: Data([1]), rawBytes: Data([2]))
+        }
+        sdk.simulatePendingState(.ready, handle: 705)
+        _ = sdk.registerSessionForTesting(session)
+        XCTAssertEqual(session.latestState, .error)
+        XCTAssertNil(sdk.findSession(handle: 705))
+        XCTAssertEqual(sdk.pendingSessionEventCountForTesting(handle: 705), 0)
+        sdk.simulatePendingState(.ready, handle: 705)
+        XCTAssertEqual(sdk.pendingSessionEventCountForTesting(handle: 705), 0)
+    }
+
+    func testShutdownDuringDeliveryDiscardsReplayAndPreventsTerminalStateRegression() {
+        let sdk = ScannerSDK.makeTestingInstance()
+        let session = sdk.makeTestingSession(handle: 706)
+        sdk.simulatePendingState(.connecting, handle: 706)
+        sdk.simulatePendingState(.ready, handle: 706)
+        replayWhileBlocked(sdk: sdk, session: session) { sdk.terminateSessionsForSdkShutdownForTesting() }
+        session.onStateChanged(.ready)
+        XCTAssertEqual(session.latestState, .disconnected)
+        XCTAssertNil(sdk.findSession(handle: 706))
+        XCTAssertEqual(sdk.pendingSessionEventCountForTesting(handle: 706), 0)
+    }
+
+    private func replayWhileBlocked(sdk: ScannerSDK, session: ScannerSession, live: () -> Void) {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let flagLock = NSLock()
+        var first = true
+        sdk.beforeSessionEventDeliveryForTesting = { handle in
+            flagLock.lock()
+            let blocks = handle == session.handle && first
+            if blocks { first = false }
+            flagLock.unlock()
+            if blocks {
+                entered.signal()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+            }
+        }
+        DispatchQueue.global().async {
+            _ = sdk.registerSessionForTesting(session)
+            finished.signal()
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        live()
+        release.signal()
+        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+        sdk.beforeSessionEventDeliveryForTesting = nil
+    }
+
+    func testAvailableEmptyObjectIsSuccessfulUnconfiguredValue() throws {
+        var result = makeNsdkCapabilityValueResult()
+        result.value_kind = CapabilityValueKind.object.rawValue
+        result.value_available = 1
+
+        let value = try consumeCapabilityReadResult(&result, valueKind: .object)
+
+        XCTAssertEqual(value.kind, .object)
+        XCTAssertEqual(value.bytes, Data())
+        assertCapabilityResultDisposed(&result)
+    }
+
+    func testConfiguredObjectPreservesNativeBytes() throws {
+        let bytes: [UInt8] = [0x01, 0x31, 0x01, 0x32]
+        var result = makeNsdkCapabilityValueResult()
+        result.value_kind = CapabilityValueKind.object.rawValue
+        result.value_available = 1
+        result.value_size = UInt32(bytes.count)
+        result.value_full_size = UInt32(bytes.count)
+        withUnsafeMutableBytes(of: &result.value_bytes) { buffer in
+            buffer.copyBytes(from: bytes)
+        }
+
+        let value = try consumeCapabilityReadResult(&result, valueKind: .object)
+
+        XCTAssertEqual(value.kind, .object)
+        XCTAssertEqual(value.bytes, Data(bytes))
+        assertCapabilityResultDisposed(&result)
+    }
+
+    func testUnavailableObjectRemainsFailureAndDisposesResult() {
+        var result = makeNsdkCapabilityValueResult()
+        result.value_kind = CapabilityValueKind.object.rawValue
+        result.value_available = 0
+        result.storage_token = 43
+
+        XCTAssertThrowsError(try consumeCapabilityReadResult(&result, valueKind: .object)) { error in
+            XCTAssertEqual((error as? ScannerError)?.code, 11)
+        }
+        XCTAssertNotEqual(result.storage_token, 43)
+        assertCapabilityResultDisposed(&result)
+    }
+
+    private func assertCapabilityResultDisposed(_ result: inout nsdk_capability_value_result_t) {
+        var length: UInt32 = 0
+        XCTAssertEqual(
+            nsdk_capability_value_result_copy_full_value_bytes(&result, nil, 0, &length),
+            nsdk_error_t(NSDK_ERROR_INVALID_ARGUMENT)
+        )
+    }
+
     func testDiscoveryBurstPreservesEveryDeviceForSlowConsumer() async {
         // Exercise the same unbounded hub policy as discovery without native hardware.
         let hub = StreamHub<Int>(capacity: nil)

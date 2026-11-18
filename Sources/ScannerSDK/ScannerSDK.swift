@@ -17,6 +17,8 @@ public final class ScannerSDK: @unchecked Sendable {
     private var discoveredDevices: [String: DiscoveredDevice] = [:]
     private var sessions: [UInt64: ScannerSession] = [:]
     private var pendingSessionEvents: [UInt64: PendingSessionEvents] = [:]
+    private var drainingSessions: [UInt64: ScannerSession] = [:]
+    internal var beforeSessionEventDeliveryForTesting: ((UInt64) -> Void)?
     private var retiredSessionHandles = Set<UInt64>()
     private var retiredSessionHandleOrder: [UInt64] = []
     private var shutdownInProgress = false
@@ -261,6 +263,7 @@ public final class ScannerSDK: @unchecked Sendable {
         let activeSessions = Array(sessions.values)
         sessions.removeAll()
         pendingSessionEvents.removeAll()
+        drainingSessions.removeAll()
         retiredSessionHandles.removeAll()
         retiredSessionHandleOrder.removeAll()
         let oldDiscoveryHub = discoveryHub
@@ -292,6 +295,7 @@ public final class ScannerSDK: @unchecked Sendable {
 
         lock.lock()
         pendingSessionEvents.removeAll()
+        drainingSessions.removeAll()
         shutdownInProgress = false
         lock.unlock()
         try nsdkCheck(shutdownCode, operation: "shutdown")
@@ -386,15 +390,7 @@ public final class ScannerSDK: @unchecked Sendable {
             )
         }
         let session = ScannerSession(handle: sessionHandle, deviceId: deviceId, transportType: transport, sdk: self)
-        var pendingEvents: PendingSessionEvents?
-        lock.lock()
-        sessions[sessionHandle] = session
-        retiredSessionHandles.remove(sessionHandle)
-        retiredSessionHandleOrder.removeAll { $0 == sessionHandle }
-        pendingEvents = pendingSessionEvents.removeValue(forKey: sessionHandle)
-        lock.unlock()
-        pendingEvents?.drain(into: session)
-        return session
+        return registerSession(session)
     }
 
     public func getDeviceModelProfile(_ modelKey: String) -> DeviceModelProfile? {
@@ -618,6 +614,7 @@ public final class ScannerSDK: @unchecked Sendable {
         lock.lock()
         sessions.removeValue(forKey: handle)
         pendingSessionEvents.removeValue(forKey: handle)
+        drainingSessions.removeValue(forKey: handle)
         if retiredSessionHandles.insert(handle).inserted {
             retiredSessionHandleOrder.append(handle)
             if retiredSessionHandleOrder.count > Self.maxRetiredSessionHandles {
@@ -690,25 +687,73 @@ public final class ScannerSDK: @unchecked Sendable {
         }
     }
 
-    private func enqueuePendingSessionEvent(_ event: PendingSessionEvent, handle: UInt64) {
+    private func registerSession(_ session: ScannerSession) -> ScannerSession {
         lock.lock()
-        defer { lock.unlock() }
+        let activeSession = sessions[session.handle] ?? session
+        sessions[session.handle] = activeSession
+        retiredSessionHandles.remove(session.handle)
+        retiredSessionHandleOrder.removeAll { $0 == session.handle }
+        let shouldDrain = drainingSessions[session.handle] == nil
+        if shouldDrain { drainingSessions[session.handle] = activeSession }
+        lock.unlock()
+        if shouldDrain { drainSessionEvents(into: activeSession) }
+        return activeSession
+    }
+
+    private func dispatchOrQueueSessionEvent(_ event: PendingSessionEvent, handle: UInt64) {
+        lock.lock()
         guard !retiredSessionHandles.contains(handle) else {
-            emitDebug("Drop late session event for retired handle=\(handle)")
+            lock.unlock()
             return
         }
-        if pendingSessionEvents[handle] == nil && pendingSessionEvents.count >= Self.maxPendingSessionHandles,
-           let oldestHandle = pendingSessionEvents.keys.first {
+        let activeSession = sessions[handle]
+        let unpublishedHandles = pendingSessionEvents.keys.filter { sessions[$0] == nil }
+        if activeSession == nil && pendingSessionEvents[handle] == nil &&
+           unpublishedHandles.count >= Self.maxPendingSessionHandles,
+           let oldestHandle = unpublishedHandles.first {
             pendingSessionEvents.removeValue(forKey: oldestHandle)
-            emitDebug("Drop pending session event queue handle=\(oldestHandle)")
         }
         var pending = pendingSessionEvents[handle] ?? PendingSessionEvents()
-        if pending.events.count == Self.maxPendingEventsPerSession {
+        // A terminal event must survive the bounded early-event queue until registration.
+        if case .state(let state) = pending.events.last, state == .disconnected || state == .error {
+            lock.unlock()
+            return
+        }
+        if activeSession == nil && pending.events.count == Self.maxPendingEventsPerSession {
             pending.events.removeFirst()
-            emitDebug("Drop oldest pending session event handle=\(handle)")
         }
         pending.events.append(event)
         pendingSessionEvents[handle] = pending
+        let drainer = activeSession.flatMap { session -> ScannerSession? in
+            guard drainingSessions[handle] == nil else { return nil }
+            drainingSessions[handle] = session
+            return session
+        }
+        lock.unlock()
+        if let drainer { drainSessionEvents(into: drainer) }
+    }
+
+    private func drainSessionEvents(into session: ScannerSession) {
+        while true {
+            lock.lock()
+            guard sessions[session.handle] === session, drainingSessions[session.handle] === session else {
+                lock.unlock()
+                return
+            }
+            guard var pending = pendingSessionEvents[session.handle], !pending.events.isEmpty else {
+                pendingSessionEvents.removeValue(forKey: session.handle)
+                drainingSessions.removeValue(forKey: session.handle)
+                lock.unlock()
+                return
+            }
+            let event = pending.events.removeFirst()
+            pendingSessionEvents[session.handle] = pending
+            lock.unlock()
+            // Delivery may reenter the SDK. Never hold the routing lock here.
+            beforeSessionEventDeliveryForTesting?(session.handle)
+            guard findSession(handle: session.handle) === session else { continue }
+            event.deliver(into: session)
+        }
     }
 
     private static let maxPendingEventsPerSession = 32
@@ -765,11 +810,7 @@ public final class ScannerSDK: @unchecked Sendable {
                 "state": "\(state)",
             ]
         )
-        if let session {
-            session.onStateChanged(state)
-            return
-        }
-        enqueuePendingSessionEvent(.state(state), handle: handle)
+        dispatchOrQueueSessionEvent(.state(state), handle: handle)
     }
 
     private func recordScanSummary(
@@ -805,16 +846,7 @@ public final class ScannerSDK: @unchecked Sendable {
             textBytes: textBytes,
             rawBytes: rawBytes
         )
-        if let session = findSession(handle: handle) {
-            session.onScanEvent(
-                timestampMs: scanData.timestamp_ms,
-                barcodeType: scanData.barcode_type,
-                textBytes: textBytes,
-                rawBytes: rawBytes
-            )
-            return
-        }
-        enqueuePendingSessionEvent(
+        dispatchOrQueueSessionEvent(
             .scan(
                 PendingScanEvent(
                     timestampMs: scanData.timestamp_ms,
@@ -876,13 +908,7 @@ extension ScannerSDK {
     }
 
     internal func registerSessionForTesting(_ session: ScannerSession) -> ScannerSession {
-        var pendingEvents: PendingSessionEvents?
-        lock.lock()
-        sessions[session.handle] = session
-        pendingEvents = pendingSessionEvents.removeValue(forKey: session.handle)
-        lock.unlock()
-        pendingEvents?.drain(into: session)
-        return session
+        registerSession(session)
     }
 
     internal func registerSessionForTesting(handle: UInt64) -> ScannerSession {
@@ -893,9 +919,16 @@ extension ScannerSDK {
         lock.lock()
         sessions.removeAll()
         pendingSessionEvents.removeAll()
+        drainingSessions.removeAll()
         retiredSessionHandles.removeAll()
         retiredSessionHandleOrder.removeAll()
         lock.unlock()
+    }
+
+    internal func pendingSessionEventCountForTesting(handle: UInt64) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingSessionEvents[handle]?.events.count ?? 0
     }
 
     internal func terminateSessionsForSdkShutdownForTesting() {
@@ -903,6 +936,7 @@ extension ScannerSDK {
         let activeSessions = Array(sessions.values)
         sessions.removeAll()
         pendingSessionEvents.removeAll()
+        drainingSessions.removeAll()
         lock.unlock()
         for session in activeSessions {
             session.terminateForSdkShutdown()
@@ -941,16 +975,7 @@ extension ScannerSDK {
             textBytes: textBytes,
             rawBytes: rawBytes
         )
-        if let session = findSession(handle: handle) {
-            session.onScanEvent(
-                timestampMs: timestampMs,
-                barcodeType: barcodeType,
-                textBytes: textBytes,
-                rawBytes: rawBytes
-            )
-            return
-        }
-        enqueuePendingSessionEvent(
+        dispatchOrQueueSessionEvent(
             .scan(
                 PendingScanEvent(
                     timestampMs: timestampMs,
@@ -973,23 +998,7 @@ extension ScannerSDK {
         errorCode: Int32,
         message: String?
     ) {
-        if let session = findSession(handle: handle) {
-            session.onInitializationStage(
-                SessionInitializationStageEvent(
-                    sessionHandle: handle,
-                    deviceId: session.deviceId,
-                    selectedModelKey: selectedModelKey,
-                    stage: stage,
-                    timestampMs: timestampMs,
-                    traceId: traceId,
-                    success: success,
-                    errorCode: errorCode,
-                    message: message
-                )
-            )
-            return
-        }
-        enqueuePendingSessionEvent(
+        dispatchOrQueueSessionEvent(
             .initializationStage(
                 PendingSessionInitializationStage(
                     selectedModelKey: selectedModelKey,
@@ -1029,11 +1038,7 @@ extension ScannerSDK {
             ]
         )
         sessionFailureHub.yield(sessionFailure)
-        if let session = activeSession {
-            session.onFailure(sessionFailure)
-            return
-        }
-        enqueuePendingSessionEvent(
+        dispatchOrQueueSessionEvent(
             .failure(
                 PendingSessionFailure(
                     transport: transport,
@@ -1057,11 +1062,7 @@ extension ScannerSDK {
             errorCode: event.error_code,
             message: stringFromCStringBuffer(event.message).isEmpty ? nil : stringFromCStringBuffer(event.message)
         )
-        if let session = findSession(handle: handle) {
-            session.onInitializationStage(stageEvent)
-            return
-        }
-        enqueuePendingSessionEvent(
+        dispatchOrQueueSessionEvent(
             .initializationStage(
                 PendingSessionInitializationStage(
                     selectedModelKey: stageEvent.selectedModelKey,
@@ -1080,9 +1081,7 @@ extension ScannerSDK {
     fileprivate func handleCommandTrace(handle: UInt64, trace: nsdk_command_trace_t) {
         let value = CommandTrace(cValue: trace)
         emitCommandTrace(value)
-        if let session = findSession(handle: handle) {
-            session.onCommandTrace(value)
-        }
+        dispatchOrQueueSessionEvent(.trace(value), handle: handle)
     }
 
     fileprivate func handleNativeLog(level: Int32, message: String) {
@@ -1122,56 +1121,56 @@ private struct PendingSessionInitializationStage {
 }
 
 private enum PendingSessionEvent {
+    case trace(CommandTrace)
     case state(SessionState)
     case scan(PendingScanEvent)
     case failure(PendingSessionFailure)
     case initializationStage(PendingSessionInitializationStage)
+
+    func deliver(into session: ScannerSession) {
+        switch self {
+        case .trace(let trace):
+            session.onCommandTrace(trace)
+        case .state(let state):
+            session.onStateChanged(state)
+        case .scan(let scan):
+            session.onScanEvent(
+                timestampMs: scan.timestampMs,
+                barcodeType: scan.barcodeType,
+                textBytes: scan.textBytes,
+                rawBytes: scan.rawBytes
+            )
+        case .failure(let failure):
+            session.onFailure(
+                SessionFailure(
+                    sessionHandle: session.handle,
+                    deviceId: session.deviceId,
+                    transportType: failure.transport,
+                    issue: failure.issue,
+                    message: ScannerSDK.describeTransportFailure(transport: failure.transport, issue: failure.issue),
+                    platformErrorCode: failure.platformErrorCode
+                )
+            )
+        case .initializationStage(let stage):
+            session.onInitializationStage(
+                SessionInitializationStageEvent(
+                    sessionHandle: session.handle,
+                    deviceId: session.deviceId,
+                    selectedModelKey: stage.selectedModelKey,
+                    stage: stage.stage,
+                    timestampMs: stage.timestampMs,
+                    traceId: stage.traceId,
+                    success: stage.success,
+                    errorCode: stage.errorCode,
+                    message: stage.message
+                )
+            )
+        }
+    }
 }
 
 private struct PendingSessionEvents {
     var events: [PendingSessionEvent] = []
-
-    mutating func drain(into session: ScannerSession) {
-        for event in events {
-            switch event {
-            case .state(let state):
-                session.onStateChanged(state)
-            case .scan(let scan):
-                session.onScanEvent(
-                    timestampMs: scan.timestampMs,
-                    barcodeType: scan.barcodeType,
-                    textBytes: scan.textBytes,
-                    rawBytes: scan.rawBytes
-                )
-            case .failure(let failure):
-                session.onFailure(
-                    SessionFailure(
-                        sessionHandle: session.handle,
-                        deviceId: session.deviceId,
-                        transportType: failure.transport,
-                        issue: failure.issue,
-                        message: ScannerSDK.describeTransportFailure(transport: failure.transport, issue: failure.issue),
-                        platformErrorCode: failure.platformErrorCode
-                    )
-                )
-            case .initializationStage(let stage):
-                session.onInitializationStage(
-                    SessionInitializationStageEvent(
-                        sessionHandle: session.handle,
-                        deviceId: session.deviceId,
-                        selectedModelKey: stage.selectedModelKey,
-                        stage: stage.stage,
-                        timestampMs: stage.timestampMs,
-                        traceId: stage.traceId,
-                        success: stage.success,
-                        errorCode: stage.errorCode,
-                        message: stage.message
-                    )
-                )
-            }
-        }
-        events.removeAll()
-    }
 }
 
 private func nsdk_swift_discovery_failure_callback(
